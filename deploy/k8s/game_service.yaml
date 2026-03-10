@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: game-service
+  namespace: kd39
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: game-service
+  template:
+    metadata:
+      labels:
+        app: game-service
+    spec:
+      containers:
+        - name: game-service
+          image: kd39/game-service:latest
+          args: ["/app/config/game_service.yaml"]
+          ports:
+            - containerPort: 50053
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: kd39-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: game-service
+  namespace: kd39
+spec:
+  selector:
+    app: game-service
+  ports:
+    - port: 50053
+      targetPort: 50053

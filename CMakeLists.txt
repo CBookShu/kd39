@@ -1,0 +1,33 @@
+cmake_minimum_required(VERSION 3.24)
+project(kd39 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(BUILD_TESTS "Build unit and integration tests" ON)
+option(KD39_ENABLE_TESTS "Resolve GTest and test-only dependencies" ${BUILD_TESTS})
+option(KD39_ENABLE_ETCD "Resolve optional etcd client dependencies" OFF)
+option(KD39_ETCD_CORE_ONLY "Build etcd-cpp-apiv3 synchronous runtime only" ON)
+option(KD39_ENABLE_OBSERVABILITY "Resolve optional observability dependencies" OFF)
+option(KD39_ENABLE_GATEWAY "Resolve optional full gateway networking dependencies" OFF)
+set(KD39_ETCD_CPP_APIV3_TAG "v0.15.4" CACHE STRING "Pinned etcd-cpp-apiv3 version used by FetchContent")
+
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+
+include(CompilerOptions)
+include(Dependencies)
+
+add_subdirectory(api)
+add_subdirectory(common)
+add_subdirectory(infrastructure)
+add_subdirectory(framework)
+add_subdirectory(gateways)
+add_subdirectory(services)
+add_subdirectory(tools)
+
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

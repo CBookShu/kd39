@@ -1,0 +1,6 @@
+apiVersion: v2
+name: kd39
+description: Helm chart for the kd39 C++ game backend stack
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

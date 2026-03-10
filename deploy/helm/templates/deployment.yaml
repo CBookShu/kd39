@@ -1,0 +1,33 @@
+{{- range $name, $svc := .Values.services }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name | replace "_" "-" }}
+  namespace: {{ $.Values.namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ $name | replace "_" "-" }}
+  template:
+    metadata:
+      labels:
+        app: {{ $name | replace "_" "-" }}
+        {{- include "kd39.labels" $ | nindent 8 }}
+    spec:
+      containers:
+        - name: {{ $name | replace "_" "-" }}
+          image: {{ $svc.image }}
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          args: ["/app/config/{{ $svc.configFile }}"]
+          ports:
+            - containerPort: {{ $svc.port }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: kd39-config
+---
+{{- end }}

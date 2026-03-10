@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package kd39.api.config;
+
+option cc_enable_arenas = true;
+
+// ---------- messages ----------
+
+message ConfigEntry {
+    string namespace_name = 1;
+    string key            = 2;
+    string value          = 3;
+    int64  version        = 4;
+    string environment    = 5;  // dev / test / prod
+}
+
+message GetConfigRequest {
+    string namespace_name = 1;
+    string key            = 2;
+}
+
+message GetConfigResponse {
+    ConfigEntry entry = 1;
+}
+
+message BatchGetConfigRequest {
+    string namespace_name = 1;
+}
+
+message BatchGetConfigResponse {
+    repeated ConfigEntry entries = 1;
+}
+
+message PublishConfigRequest {
+    ConfigEntry entry = 1;
+}
+
+message PublishConfigResponse {
+    int64 version = 1;
+}
+
+message WatchConfigRequest {
+    string namespace_name = 1;
+    int64  since_version  = 2;
+}
+
+message WatchConfigResponse {
+    repeated ConfigEntry updates = 1;
+}
+
+// ---------- service ----------
+
+service ConfigService {
+    rpc GetConfig      (GetConfigRequest)      returns (GetConfigResponse);
+    rpc BatchGetConfig (BatchGetConfigRequest)  returns (BatchGetConfigResponse);
+    rpc PublishConfig  (PublishConfigRequest)   returns (PublishConfigResponse);
+    rpc WatchConfig    (WatchConfigRequest)     returns (stream WatchConfigResponse);
+}

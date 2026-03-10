@@ -1,0 +1,8 @@
+bind_host: 0.0.0.0
+http_port: 8080
+ws_port: 8081
+etcd_endpoints: http://127.0.0.1:2379
+config_service_target: 127.0.0.1:50051
+user_service_target: 127.0.0.1:50052
+game_service_target: 127.0.0.1:50053
+jwt_secret: dev-secret

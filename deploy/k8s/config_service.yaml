@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: config-service
+  namespace: kd39
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: config-service
+  template:
+    metadata:
+      labels:
+        app: config-service
+    spec:
+      containers:
+        - name: config-service
+          image: kd39/config-service:latest
+          args: ["/app/config/config_service.yaml"]
+          ports:
+            - containerPort: 50051
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: kd39-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: config-service
+  namespace: kd39
+spec:
+  selector:
+    app: config-service
+  ports:
+    - port: 50051
+      targetPort: 50051

@@ -1,0 +1,53 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "kd39",
+  "version-string": "0.1.0",
+  "builtin-baseline": "66c0373dc7fca549e5803087b9487edfe3aca0a1",
+  "supports": "x64 & (windows | linux)",
+  "dependencies": [
+    "fmt",
+    "grpc",
+    "nlohmann-json",
+    "openssl",
+    "protobuf",
+    "spdlog",
+    "yaml-cpp",
+    "boost-system",
+    {
+      "name": "protobuf",
+      "host": true
+    },
+    {
+      "name": "grpc",
+      "host": true
+    }
+  ],
+  "features": {
+    "tests": {
+      "description": "Enable test-only dependencies.",
+      "dependencies": [
+        "gtest"
+      ]
+    },
+    "observability": {
+      "description": "Enable OpenTelemetry and Prometheus integrations.",
+      "dependencies": [
+        {
+          "name": "opentelemetry-cpp",
+          "features": [
+            "otlp-grpc",
+            "prometheus"
+          ]
+        },
+        "prometheus-cpp"
+      ]
+    },
+    "gateway": {
+      "description": "Enable the fuller Boost networking stack for HTTP and WebSocket runtime work.",
+      "dependencies": [
+        "boost-asio",
+        "boost-beast"
+      ]
+    }
+  }
+}

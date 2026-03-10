@@ -1,0 +1,22 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kd39-config
+  namespace: {{ .Values.namespace }}
+data:
+  config_service.yaml: |
+    service_name: config_service
+    bind_host: 0.0.0.0
+    grpc_port: 50051
+  user_service.yaml: |
+    service_name: user_service
+    bind_host: 0.0.0.0
+    grpc_port: 50052
+  game_service.yaml: |
+    service_name: game_service
+    bind_host: 0.0.0.0
+    grpc_port: 50053
+  access_gateway.yaml: |
+    bind_host: 0.0.0.0
+    http_port: 8080
+    ws_port: 8081

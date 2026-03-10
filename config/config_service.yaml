@@ -1,0 +1,14 @@
+service_name: config_service
+bind_host: 0.0.0.0
+grpc_port: 50051
+mysql_host: 127.0.0.1
+mysql_port: 3306
+mysql_user: root
+mysql_password: kd39dev
+mysql_db: kd39
+redis_host: 127.0.0.1
+redis_port: 6379
+redis_db: 0
+etcd_endpoints: http://127.0.0.1:2379
+mq_uri: redis://127.0.0.1:6379
+registry_ttl_seconds: 30

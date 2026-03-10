@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+package kd39.api.common;
+
+option cc_enable_arenas = true;
+
+message RequestContext {
+    string request_id     = 1;
+    string trace_id       = 2;
+    string user_id        = 3;
+    string traffic_tag    = 4;
+    string client_version = 5;
+    string zone           = 6;
+}

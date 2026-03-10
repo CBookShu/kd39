@@ -1,0 +1,21 @@
+namespace: kd39
+imagePullPolicy: IfNotPresent
+services:
+  config_service:
+    image: kd39/config-service:latest
+    port: 50051
+    configFile: config_service.yaml
+  user_service:
+    image: kd39/user-service:latest
+    port: 50052
+    configFile: user_service.yaml
+  game_service:
+    image: kd39/game-service:latest
+    port: 50053
+    configFile: game_service.yaml
+  access_gateway:
+    image: kd39/access-gateway:latest
+    port: 8080
+    extraPorts:
+      - 8081
+    configFile: access_gateway.yaml

@@ -1,0 +1,16 @@
+build/
+cmake-build-*/
+.cache/
+vcpkg_installed/
+compile_commands.json
+*.o
+*.a
+*.so
+*.dylib
+*.exe
+.vs/
+.vscode/
+.idea/
+CMakeUserPresets.json
+*.swp
+*~

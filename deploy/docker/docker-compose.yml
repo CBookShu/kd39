@@ -1,0 +1,141 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: kd39-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - kd39_net
+
+  mysql:
+    image: mysql:8.0
+    container_name: kd39-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-kd39dev}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-kd39}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init/mysql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-kd39dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - kd39_net
+
+  etcd:
+    image: bitnami/etcd:3.5
+    container_name: kd39-etcd
+    ports:
+      - "2379:2379"
+      - "2380:2380"
+    environment:
+      ALLOW_NONE_AUTHENTICATION: "yes"
+      ETCD_ADVERTISE_CLIENT_URLS: ${ETCD_ADVERTISE_CLIENT_URLS:-http://0.0.0.0:2379}
+      ETCD_LISTEN_CLIENT_URLS: "http://0.0.0.0:2379"
+      ETCD_LISTEN_PEER_URLS: "http://0.0.0.0:2380"
+    volumes:
+      - etcd_data:/bitnami/etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - kd39_net
+
+  config_service:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.service
+      args:
+        SERVICE_TARGET: config_service
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+    networks:
+      - kd39_net
+
+  user_service:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.service
+      args:
+        SERVICE_TARGET: user_service
+    depends_on:
+      redis:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    ports:
+      - "50052:50052"
+    networks:
+      - kd39_net
+
+  game_service:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.service
+      args:
+        SERVICE_TARGET: game_service
+    depends_on:
+      redis:
+        condition: service_healthy
+      etcd:
+        condition: service_healthy
+    ports:
+      - "50053:50053"
+    networks:
+      - kd39_net
+
+  access_gateway:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.service
+      args:
+        SERVICE_TARGET: access_gateway
+    depends_on:
+      config_service:
+        condition: service_started
+      user_service:
+        condition: service_started
+      game_service:
+        condition: service_started
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    networks:
+      - kd39_net
+
+volumes:
+  redis_data:
+  mysql_data:
+  etcd_data:
+
+networks:
+  kd39_net:
+    driver: bridge

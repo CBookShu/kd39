@@ -1,0 +1,28 @@
+syntax = "proto3";
+
+package kd39.api.game;
+
+option cc_enable_arenas = true;
+
+message CreateRoomRequest {
+    string room_name = 1;
+    int32  max_players = 2;
+}
+
+message CreateRoomResponse {
+    string room_id = 1;
+}
+
+message JoinRoomRequest {
+    string room_id = 1;
+    string user_id = 2;
+}
+
+message JoinRoomResponse {
+    bool success = 1;
+}
+
+service GameService {
+    rpc CreateRoom (CreateRoomRequest) returns (CreateRoomResponse);
+    rpc JoinRoom   (JoinRoomRequest)   returns (JoinRoomResponse);
+}

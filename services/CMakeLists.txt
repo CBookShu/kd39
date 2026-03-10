@@ -1,0 +1,3 @@
+add_subdirectory(config_service)
+add_subdirectory(user_service)
+add_subdirectory(game_service)
