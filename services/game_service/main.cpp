@@ -11,7 +11,14 @@
 int main(int argc, char* argv[]) {
     const std::string config_path = argc > 1 ? argv[1] : "config/game_service.yaml";
     auto cfg = kd39::common::config::LoadServiceConfig(config_path, "game_service", 50053);
-    kd39::common::log::InitLogger(cfg.service_name);
+    kd39::common::log::InitLogger({
+        cfg.service_name,
+        cfg.log_dir,
+        static_cast<std::size_t>(cfg.log_max_size_mb),
+        static_cast<std::size_t>(cfg.log_max_files),
+        cfg.log_level,
+        true,
+    });
 
     auto redis = kd39::infrastructure::storage::redis::RedisClient::Create({
         cfg.redis_host, cfg.redis_port, cfg.redis_password, cfg.redis_db, cfg.redis_pool_size

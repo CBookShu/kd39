@@ -1,15 +1,15 @@
 #include "infrastructure/observability/telemetry.h"
 
-#include <spdlog/spdlog.h>
+#include "common/log/logger.h"
 
 namespace kd39::infrastructure::observability {
 
 Span::Span(std::string name) : name_(std::move(name)) {
-    spdlog::debug("span start: {}", name_);
+    KD39_LOG_DEBUG("span start: {}", name_);
 }
 
 Span::~Span() {
-    spdlog::debug("span end: {}", name_);
+    KD39_LOG_DEBUG("span end: {}", name_);
 }
 
 Tracer& Tracer::Instance() {

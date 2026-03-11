@@ -5,7 +5,6 @@
 
 #include "common/config/app_config.h"
 #include "common/log/logger.h"
-#include "framework/app/application.h"
 #include "infrastructure/coordination/impl/etcd/factory.h"
 #include "infrastructure/mq/producer.h"
 #include "infrastructure/storage/mysql/connection_pool.h"
@@ -14,7 +13,14 @@
 int main(int argc, char* argv[]) {
     const std::string config_path = argc > 1 ? argv[1] : "config/config_service.yaml";
     auto cfg = kd39::common::config::LoadServiceConfig(config_path, "config_service", 50051);
-    kd39::common::log::InitLogger(cfg.service_name);
+    kd39::common::log::InitLogger({
+        cfg.service_name,
+        cfg.log_dir,
+        static_cast<std::size_t>(cfg.log_max_size_mb),
+        static_cast<std::size_t>(cfg.log_max_files),
+        cfg.log_level,
+        true,
+    });
 
     auto mysql = kd39::infrastructure::storage::mysql::ConnectionPool::Create({
         cfg.mysql_host, cfg.mysql_port, cfg.mysql_user, cfg.mysql_password, cfg.mysql_db, cfg.mysql_pool_size

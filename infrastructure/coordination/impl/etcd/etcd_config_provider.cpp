@@ -1,7 +1,7 @@
 #include "infrastructure/coordination/impl/etcd/factory.h"
 
+#include "common/log/logger.h"
 #include "infrastructure/coordination/impl/etcd/etcd_state.h"
-#include <spdlog/spdlog.h>
 
 namespace kd39::infrastructure::coordination::etcd {
 
@@ -9,7 +9,7 @@ class EtcdConfigProvider final : public ConfigProvider {
 public:
     explicit EtcdConfigProvider(std::string endpoints)
         : endpoints_(std::move(endpoints)) {
-        spdlog::info("EtcdConfigProvider ready: {}", endpoints_);
+        KD39_LOG_INFO("EtcdConfigProvider ready: {}", endpoints_);
     }
 
     std::string Get(const std::string& key) override {

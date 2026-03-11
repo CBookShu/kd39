@@ -1,9 +1,10 @@
 #include "common/config/app_config.h"
 
 #include <fstream>
-#include <spdlog/spdlog.h>
 #include <string>
 #include <unordered_map>
+
+#include "common/log/logger.h"
 
 namespace kd39::common::config {
 namespace {
@@ -26,7 +27,7 @@ FlatConfig LoadFlatConfig(const std::string& path) {
     FlatConfig cfg;
     std::ifstream in(path);
     if (!in.is_open()) {
-        spdlog::warn("config file '{}' not found, using defaults", path);
+        KD39_LOG_WARN("config file '{}' not found, using defaults", path);
         return cfg;
     }
 
@@ -88,6 +89,10 @@ ServiceConfig LoadServiceConfig(const std::string& path,
     service.service_name = GetOr(cfg, "service_name", default_service_name);
     service.bind_host = GetOr(cfg, "bind_host", std::string("0.0.0.0"));
     service.grpc_port = GetOr(cfg, "grpc_port", default_grpc_port);
+    service.log_dir = GetOr(cfg, "log_dir", std::string("logs"));
+    service.log_max_size_mb = GetOr(cfg, "log_max_size_mb", 100);
+    service.log_max_files = GetOr(cfg, "log_max_files", 10);
+    service.log_level = GetOr(cfg, "log_level", std::string("info"));
     service.mysql_host = GetOr(cfg, "mysql_host", std::string("127.0.0.1"));
     service.mysql_port = GetOr(cfg, "mysql_port", static_cast<uint16_t>(3306));
     service.mysql_user = GetOr(cfg, "mysql_user", std::string("root"));
@@ -111,6 +116,10 @@ GatewayConfig LoadGatewayConfig(const std::string& path) {
     gateway.bind_host = GetOr(cfg, "bind_host", std::string("0.0.0.0"));
     gateway.http_port = GetOr(cfg, "http_port", static_cast<uint16_t>(8080));
     gateway.ws_port = GetOr(cfg, "ws_port", static_cast<uint16_t>(8081));
+    gateway.log_dir = GetOr(cfg, "log_dir", std::string("logs"));
+    gateway.log_max_size_mb = GetOr(cfg, "log_max_size_mb", 100);
+    gateway.log_max_files = GetOr(cfg, "log_max_files", 10);
+    gateway.log_level = GetOr(cfg, "log_level", std::string("info"));
     gateway.etcd_endpoints = GetOr(cfg, "etcd_endpoints", std::string("http://127.0.0.1:2379"));
     gateway.config_service_target = GetOr(cfg, "config_service_target", std::string("127.0.0.1:50051"));
     gateway.user_service_target = GetOr(cfg, "user_service_target", std::string("127.0.0.1:50052"));

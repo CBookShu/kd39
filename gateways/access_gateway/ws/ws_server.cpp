@@ -1,9 +1,9 @@
 #include "access_gateway/ws/ws_server.h"
 
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
 
 #include "access_gateway/context/gateway_context.h"
+#include "common/log/logger.h"
 
 namespace kd39::gateways::access {
 
@@ -19,11 +19,11 @@ WsServer::WsServer(const std::string& address,
 WsServer::~WsServer() { Stop(); }
 
 void WsServer::Start() {
-    spdlog::info("WsServer prepared on {}:{} (testable message path enabled)", address_, port_);
+    KD39_LOG_INFO("WsServer prepared on {}:{} (testable message path enabled)", address_, port_);
 }
 
 void WsServer::Stop() {
-    spdlog::info("WsServer stopping");
+    KD39_LOG_INFO("WsServer stopping");
 }
 
 std::string WsServer::HandleMessageForTesting(const std::string& payload,

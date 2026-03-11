@@ -3,8 +3,9 @@
 #include <chrono>
 #include <deque>
 #include <mutex>
-#include <spdlog/spdlog.h>
 #include <unordered_map>
+
+#include "common/log/logger.h"
 
 namespace kd39::infrastructure::storage::redis {
 namespace {
@@ -53,7 +54,7 @@ class RedisClientImpl final : public RedisClient {
 public:
     explicit RedisClientImpl(RedisConfig cfg)
         : cfg_(std::move(cfg)), state_(SharedStateFor(cfg_)) {
-        spdlog::info("Redis client ready: {}:{} db={}", cfg_.host, cfg_.port, cfg_.db);
+        KD39_LOG_INFO("Redis client ready: {}:{} db={}", cfg_.host, cfg_.port, cfg_.db);
     }
 
     bool Set(const std::string& key, const std::string& value) override {

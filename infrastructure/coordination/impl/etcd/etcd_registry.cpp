@@ -1,14 +1,14 @@
 #include "infrastructure/coordination/impl/etcd/etcd_registry.h"
 
+#include "common/log/logger.h"
 #include "infrastructure/coordination/impl/etcd/etcd_state.h"
 #include "infrastructure/coordination/impl/etcd/factory.h"
-#include <spdlog/spdlog.h>
 
 namespace kd39::infrastructure::coordination::etcd {
 
 EtcdServiceRegistry::EtcdServiceRegistry(const std::string& endpoints)
     : endpoints_(endpoints) {
-    spdlog::info("EtcdServiceRegistry ready: {}", endpoints_);
+    KD39_LOG_INFO("EtcdServiceRegistry ready: {}", endpoints_);
 }
 
 EtcdServiceRegistry::~EtcdServiceRegistry() = default;
@@ -18,7 +18,7 @@ bool EtcdServiceRegistry::Register(const ServiceInstance& inst, int ttl_seconds)
     std::scoped_lock lock(state->mu);
     state->services[inst.service_name + "/" + inst.instance_id] = inst;
     detail::NotifyServiceWatchers(*state, inst.service_name);
-    spdlog::info("Registered service {}/{} ttl={}s", inst.service_name, inst.instance_id, ttl_seconds);
+    KD39_LOG_INFO("Registered service {}/{} ttl={}s", inst.service_name, inst.instance_id, ttl_seconds);
     return true;
 }
 
@@ -28,13 +28,13 @@ bool EtcdServiceRegistry::Deregister(const std::string& service_name,
     std::scoped_lock lock(state->mu);
     state->services.erase(service_name + "/" + instance_id);
     detail::NotifyServiceWatchers(*state, service_name);
-    spdlog::info("Deregistered service {}/{}", service_name, instance_id);
+    KD39_LOG_INFO("Deregistered service {}/{}", service_name, instance_id);
     return true;
 }
 
 EtcdServiceResolver::EtcdServiceResolver(const std::string& endpoints)
     : endpoints_(endpoints) {
-    spdlog::info("EtcdServiceResolver ready: {}", endpoints_);
+    KD39_LOG_INFO("EtcdServiceResolver ready: {}", endpoints_);
 }
 
 EtcdServiceResolver::~EtcdServiceResolver() = default;

@@ -1,13 +1,14 @@
 #include "game_service_impl.h"
 
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
+
+#include "common/log/logger.h"
 
 namespace kd39::services::game {
 
 GameServiceImpl::GameServiceImpl(Deps deps)
     : deps_(std::move(deps)) {
-    spdlog::info("GameServiceImpl created");
+    KD39_LOG_INFO("GameServiceImpl created");
 }
 
 std::string GameServiceImpl::BuildRoomCacheKey(const std::string& room_id) {

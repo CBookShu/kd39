@@ -1,9 +1,9 @@
 #include "infrastructure/mq/consumer.h"
 
 #include "local_bus.h"
+#include "common/log/logger.h"
 #include <atomic>
 #include <chrono>
-#include <spdlog/spdlog.h>
 #include <thread>
 #include <unordered_map>
 
@@ -13,14 +13,14 @@ class RedisStreamsConsumer final : public Consumer {
 public:
     RedisStreamsConsumer(std::string uri, std::string group, std::string name)
         : uri_(std::move(uri)), group_(std::move(group)), name_(std::move(name)) {
-        spdlog::info("RedisStreamsConsumer created: {} group={} consumer={}", uri_, group_, name_);
+        KD39_LOG_INFO("RedisStreamsConsumer created: {} group={} consumer={}", uri_, group_, name_);
     }
 
     ~RedisStreamsConsumer() override { Stop(); }
 
     void Subscribe(std::string_view topic, MessageHandler handler) override {
         subscriptions_[std::string(topic)] = std::move(handler);
-        spdlog::info("Subscribed topic={}", topic);
+        KD39_LOG_INFO("Subscribed topic={}", topic);
     }
 
     void Start() override {

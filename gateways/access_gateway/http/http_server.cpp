@@ -1,8 +1,7 @@
 #include "access_gateway/http/http_server.h"
 
-#include <spdlog/spdlog.h>
-
 #include "access_gateway/context/gateway_context.h"
+#include "common/log/logger.h"
 #include "infrastructure/observability/metrics.h"
 
 namespace kd39::gateways::access {
@@ -19,11 +18,11 @@ HttpServer::HttpServer(const std::string& address,
 HttpServer::~HttpServer() { Stop(); }
 
 void HttpServer::Start() {
-    spdlog::info("HttpServer prepared on {}:{} (testable request path enabled)", address_, port_);
+    KD39_LOG_INFO("HttpServer prepared on {}:{} (testable request path enabled)", address_, port_);
 }
 
 void HttpServer::Stop() {
-    spdlog::info("HttpServer stopping");
+    KD39_LOG_INFO("HttpServer stopping");
 }
 
 std::string HttpServer::HandleRequestForTesting(const std::string& path,

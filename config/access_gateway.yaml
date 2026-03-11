@@ -1,6 +1,10 @@
 bind_host: 0.0.0.0
 http_port: 8080
 ws_port: 8081
+log_dir: logs
+log_max_size_mb: 100
+log_max_files: 10
+log_level: info
 etcd_endpoints: http://127.0.0.1:2379
 config_service_target: 127.0.0.1:50051
 user_service_target: 127.0.0.1:50052

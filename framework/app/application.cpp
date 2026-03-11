@@ -1,10 +1,11 @@
 #include "framework/app/application.h"
 
-#include <spdlog/spdlog.h>
 #include <csignal>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+
+#include "common/log/logger.h"
 
 namespace {
 std::atomic<bool> g_running{true};
@@ -20,7 +21,7 @@ void SignalHandler(int) {
 namespace kd39::framework {
 
 Application::Application(std::string name) : name_(std::move(name)) {
-    spdlog::info("[{}] initializing", name_);
+    KD39_LOG_INFO("[{}] initializing", name_);
 }
 
 Application::~Application() = default;
@@ -33,18 +34,18 @@ void Application::Run() {
     std::signal(SIGINT, SignalHandler);
     std::signal(SIGTERM, SignalHandler);
 
-    spdlog::info("[{}] running – press Ctrl+C to stop", name_);
+    KD39_LOG_INFO("[{}] running - press Ctrl+C to stop", name_);
 
     {
         std::unique_lock lock(g_mu);
         g_cv.wait(lock, [] { return !g_running.load(); });
     }
 
-    spdlog::info("[{}] shutting down ...", name_);
+    KD39_LOG_INFO("[{}] shutting down ...", name_);
     for (auto it = shutdown_hooks_.rbegin(); it != shutdown_hooks_.rend(); ++it) {
         (*it)();
     }
-    spdlog::info("[{}] stopped", name_);
+    KD39_LOG_INFO("[{}] stopped", name_);
 }
 
 }  // namespace kd39::framework

@@ -1,12 +1,12 @@
 #include "access_gateway/auth/auth_middleware.h"
 
-#include <spdlog/spdlog.h>
+#include "common/log/logger.h"
 
 namespace kd39::gateways::access {
 
 std::optional<common::RequestContext> AuthMiddleware::Authenticate(const std::string& token) const {
     if (token.empty()) {
-        spdlog::warn("empty auth token");
+        KD39_LOG_WARN("empty auth token");
         return std::nullopt;
     }
 
@@ -26,7 +26,7 @@ std::optional<common::RequestContext> AuthMiddleware::Authenticate(const std::st
         return ctx;
     }
 
-    spdlog::warn("unsupported auth token format");
+    KD39_LOG_WARN("unsupported auth token format");
     return std::nullopt;
 }
 

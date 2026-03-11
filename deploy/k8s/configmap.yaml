@@ -8,6 +8,10 @@ data:
     service_name: config_service
     bind_host: 0.0.0.0
     grpc_port: 50051
+    log_dir: logs
+    log_max_size_mb: 100
+    log_max_files: 10
+    log_level: info
     mysql_host: kd39-mysql
     redis_host: kd39-redis
     etcd_endpoints: http://kd39-etcd:2379
@@ -15,6 +19,10 @@ data:
     service_name: user_service
     bind_host: 0.0.0.0
     grpc_port: 50052
+    log_dir: logs
+    log_max_size_mb: 100
+    log_max_files: 10
+    log_level: info
     mysql_host: kd39-mysql
     redis_host: kd39-redis
     etcd_endpoints: http://kd39-etcd:2379
@@ -22,12 +30,20 @@ data:
     service_name: game_service
     bind_host: 0.0.0.0
     grpc_port: 50053
+    log_dir: logs
+    log_max_size_mb: 100
+    log_max_files: 10
+    log_level: info
     redis_host: kd39-redis
     etcd_endpoints: http://kd39-etcd:2379
   access_gateway.yaml: |
     bind_host: 0.0.0.0
     http_port: 8080
     ws_port: 8081
+    log_dir: logs
+    log_max_size_mb: 100
+    log_max_files: 10
+    log_level: info
     config_service_target: config_service:50051
     user_service_target: user_service:50052
     game_service_target: game_service:50053

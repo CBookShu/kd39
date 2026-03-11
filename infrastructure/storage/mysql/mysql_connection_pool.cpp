@@ -1,8 +1,9 @@
 #include "infrastructure/storage/mysql/connection_pool.h"
 
 #include <mutex>
-#include <spdlog/spdlog.h>
 #include <unordered_map>
+
+#include "common/log/logger.h"
 
 namespace kd39::infrastructure::storage::mysql {
 namespace {
@@ -54,17 +55,17 @@ class ConnectionPoolImpl final : public ConnectionPool {
 public:
     explicit ConnectionPoolImpl(MysqlConfig cfg)
         : cfg_(std::move(cfg)), state_(SharedStateFor(cfg_)) {
-        spdlog::info("MySQL pool ready: {}:{}/{} pool_size={}",
-                     cfg_.host, cfg_.port, cfg_.db, cfg_.pool_size);
+        KD39_LOG_INFO("MySQL pool ready: {}:{}/{} pool_size={}",
+                      cfg_.host, cfg_.port, cfg_.db, cfg_.pool_size);
     }
 
     bool Execute(std::string_view sql) override {
-        spdlog::debug("MySQL Execute: {}", sql);
+        KD39_LOG_DEBUG("MySQL Execute: {}", sql);
         return true;
     }
 
     std::vector<QueryRow> Query(std::string_view sql) override {
-        spdlog::debug("MySQL Query: {}", sql);
+        KD39_LOG_DEBUG("MySQL Query: {}", sql);
         return {};
     }
 

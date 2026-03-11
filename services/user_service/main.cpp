@@ -2,7 +2,6 @@
 
 #include <fmt/format.h>
 #include <grpcpp/grpcpp.h>
-#include <spdlog/spdlog.h>
 
 #include "common/config/app_config.h"
 #include "common/log/logger.h"
@@ -14,7 +13,14 @@
 int main(int argc, char* argv[]) {
     const std::string config_path = argc > 1 ? argv[1] : "config/user_service.yaml";
     auto cfg = kd39::common::config::LoadServiceConfig(config_path, "user_service", 50052);
-    kd39::common::log::InitLogger(cfg.service_name);
+    kd39::common::log::InitLogger({
+        cfg.service_name,
+        cfg.log_dir,
+        static_cast<std::size_t>(cfg.log_max_size_mb),
+        static_cast<std::size_t>(cfg.log_max_files),
+        cfg.log_level,
+        true,
+    });
 
     auto mysql = kd39::infrastructure::storage::mysql::ConnectionPool::Create({
         cfg.mysql_host, cfg.mysql_port, cfg.mysql_user, cfg.mysql_password, cfg.mysql_db, cfg.mysql_pool_size
@@ -25,7 +31,7 @@ int main(int argc, char* argv[]) {
     auto registry = kd39::infrastructure::coordination::etcd::CreateServiceRegistry(cfg.etcd_endpoints);
     auto consumer = kd39::infrastructure::mq::CreateRedisStreamsConsumer(cfg.mq_uri, "config_group", cfg.service_name);
     consumer->Subscribe("config.changed", [](std::string_view payload) {
-        spdlog::info("user_service received config.changed event: {}", payload);
+        KD39_LOG_INFO("user_service received config.changed event: {}", payload);
     });
     consumer->Start();
 

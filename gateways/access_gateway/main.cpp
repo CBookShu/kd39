@@ -10,11 +10,19 @@
 #include "infrastructure/coordination/impl/etcd/factory.h"
 
 int main(int argc, char* argv[]) {
+    constexpr const char* kServiceName = "access_gateway";
     const std::string config_path = argc > 1 ? argv[1] : "config/access_gateway.yaml";
     auto cfg = kd39::common::config::LoadGatewayConfig(config_path);
-    kd39::common::log::InitLogger("access_gateway");
+    kd39::common::log::InitLogger({
+        kServiceName,
+        cfg.log_dir,
+        static_cast<std::size_t>(cfg.log_max_size_mb),
+        static_cast<std::size_t>(cfg.log_max_files),
+        cfg.log_level,
+        true,
+    });
 
-    kd39::framework::Application app("access_gateway");
+    kd39::framework::Application app(kServiceName);
     auto resolver = kd39::infrastructure::coordination::etcd::CreateServiceResolver(cfg.etcd_endpoints);
     auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
         kd39::gateways::access::RouterTargets{cfg.config_service_target, cfg.user_service_target, cfg.game_service_target}, resolver);

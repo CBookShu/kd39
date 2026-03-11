@@ -1,19 +1,20 @@
 #include "infrastructure/mq/producer.h"
 
 #include "local_bus.h"
-#include <spdlog/spdlog.h>
+
+#include "common/log/logger.h"
 
 namespace kd39::infrastructure::mq {
 
 class RedisStreamsProducer final : public Producer {
 public:
     explicit RedisStreamsProducer(std::string uri) : uri_(std::move(uri)) {
-        spdlog::info("RedisStreamsProducer created: {}", uri_);
+        KD39_LOG_INFO("RedisStreamsProducer created: {}", uri_);
     }
 
     bool Publish(std::string_view topic, std::string_view payload) override {
         detail::GetBus().Publish(std::string(topic), std::string(payload));
-        spdlog::debug("Published topic={} bytes={}", topic, payload.size());
+        KD39_LOG_DEBUG("Published topic={} bytes={}", topic, payload.size());
         return true;
     }
 

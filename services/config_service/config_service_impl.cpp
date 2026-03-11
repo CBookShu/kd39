@@ -1,7 +1,8 @@
 #include "config_service_impl.h"
 
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
+
+#include "common/log/logger.h"
 
 namespace kd39::services::config {
 namespace {
@@ -18,7 +19,7 @@ std::string DefaultEnv(std::string env) {
 
 ConfigServiceImpl::ConfigServiceImpl(Deps deps)
     : deps_(std::move(deps)) {
-    spdlog::info("ConfigServiceImpl created");
+    KD39_LOG_INFO("ConfigServiceImpl created");
 }
 
 std::string ConfigServiceImpl::BuildStoreKey(const std::string& ns,

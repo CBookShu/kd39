@@ -9,6 +9,10 @@ struct ServiceConfig {
     std::string service_name;
     std::string bind_host = "0.0.0.0";
     uint16_t grpc_port = 0;
+    std::string log_dir = "logs";
+    int log_max_size_mb = 100;
+    int log_max_files = 10;
+    std::string log_level = "info";
 
     std::string mysql_host = "127.0.0.1";
     uint16_t mysql_port = 3306;
@@ -32,6 +36,10 @@ struct GatewayConfig {
     std::string bind_host = "0.0.0.0";
     uint16_t http_port = 8080;
     uint16_t ws_port = 8081;
+    std::string log_dir = "logs";
+    int log_max_size_mb = 100;
+    int log_max_files = 10;
+    std::string log_level = "info";
     std::string etcd_endpoints = "http://127.0.0.1:2379";
     std::string config_service_target = "127.0.0.1:50051";
     std::string user_service_target = "127.0.0.1:50052";

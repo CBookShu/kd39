@@ -2,7 +2,8 @@
 
 #include <ctime>
 #include <nlohmann/json.hpp>
-#include <spdlog/spdlog.h>
+
+#include "common/log/logger.h"
 
 namespace kd39::services::user {
 namespace {
@@ -12,7 +13,7 @@ using kd39::infrastructure::storage::mysql::QueryRow;
 
 UserServiceImpl::UserServiceImpl(Deps deps)
     : deps_(std::move(deps)) {
-    spdlog::info("UserServiceImpl created");
+    KD39_LOG_INFO("UserServiceImpl created");
 }
 
 std::string UserServiceImpl::BuildCacheKey(const std::string& user_id) {
