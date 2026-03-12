@@ -34,7 +34,7 @@ kd39/
 ├── CMakeLists.txt          # 根构建入口
 ├── CMakePresets.json        # 构建预设 (Ninja + cl / Ninja + gcc)
 ├── vcpkg.json               # vcpkg manifest 依赖声明
-├── .clangd                  # clangd 编译数据库配置
+├── .clangd                  # clangd 本地配置（默认不纳入版本控制）
 ├── .gitignore
 │
 ├── api/                     # Protobuf / gRPC 接口定义
@@ -118,7 +118,10 @@ kd39/
 │   └── FetchEtcdCppApiv3.cmake # etcd-cpp-apiv3 FetchContent 集成
 │
 ├── scripts/
-│   └── build-windows.bat    # vcvarsall + cmake preset 包装脚本
+│   ├── build-windows.bat             # vcvarsall + cmake preset 包装脚本
+│   └── bench/
+│       ├── run_http_ws_bench.sh      # HTTP / WS / Mixed 一键基准
+│       └── run_ws_stability_bench.sh # WS 心跳与背压稳定性基准
 │
 └── docs/
     ├── README.md                    # 文档总索引

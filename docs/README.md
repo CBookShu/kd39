@@ -17,7 +17,7 @@
 - `services/user-service-architecture.md`
 - `services/game-service-architecture.md`
 - `services/access-gateway-architecture.md`
-- `services/access-gateway-single-port-design.md`（同端口改造设计，实施前文档）
+- `services/access-gateway-single-port-design.md`（同端口改造设计与落地复盘）
 
 每个服务文档均包含：职责边界、启动链路、请求路径、关键配置、依赖关系、可观测性、测试入口与盲区。
 
@@ -28,6 +28,9 @@
 ## 5) Benchmark / Quality
 
 - `gateway-benchmark.md`：网关测试与压测入口、脚本、结果落盘规范。
+- 关键脚本：
+  - `scripts/bench/run_http_ws_bench.sh`（HTTP / WS / Mixed）
+  - `scripts/bench/run_ws_stability_bench.sh`（WS 心跳与背压稳定性）
 
 ## 推荐阅读路径（新 Agent）
 

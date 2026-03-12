@@ -32,7 +32,7 @@
 - **改网关请求路由**：看 `gateways/access_gateway/routing/grpc_router.*` 和 `http/http_server.*`（同端口 HTTP/WS）。
 - **改鉴权**：看 `gateways/access_gateway/auth/auth_middleware.*`。
 - **改运行时配置项**：同时改 `app_config.h`、`app_config.cpp`、`config/*.yaml`、可能还包括 `deploy/k8s/configmap.yaml`。
-- **加测试/回归**：先看 `tests/integration/`，网关性能验证看 `bench/gateway_http_ws_bench.cpp` 与 `scripts/bench/run_http_ws_bench.sh`。
+- **加测试/回归**：先看 `tests/integration/`，网关性能验证看 `bench/gateway_http_ws_bench.cpp`、`scripts/bench/run_http_ws_bench.sh`、`scripts/bench/run_ws_stability_bench.sh`。
 
 ## 3. 关键运行参数速记
 
@@ -60,4 +60,12 @@
 - 构建/工具链细节：`build-with-vcpkg.md`
 - 网关异步演进计划：`gateway-async-roadmap.md`
 - 网关测试与压测：`gateway-benchmark.md`
-- 网关同端口实施前设计：`services/access-gateway-single-port-design.md`
+- 网关同端口设计与落地复盘：`services/access-gateway-single-port-design.md`
+
+## 6. 当前基线（新 Agent 快速对齐）
+
+- Gateway 回归命令：`build/linux-debug-local/tests/integration_tests --gtest_filter='Gateway*'`
+- 当前回归状态：`15/15` 通过（见 `gateway-benchmark.md`）
+- 压测入口：
+  - 常规：`scripts/bench/run_http_ws_bench.sh`
+  - WS 稳定性：`scripts/bench/run_ws_stability_bench.sh`

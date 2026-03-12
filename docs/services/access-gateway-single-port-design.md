@@ -75,6 +75,7 @@ flowchart TD
 - `tests/integration/gateway_async_test.cpp`
 - `bench/gateway_http_ws_bench.cpp`
 - `scripts/bench/run_http_ws_bench.sh`
+- `scripts/bench/run_ws_stability_bench.sh`
 - `docs/gateway-benchmark.md`
 
 ### 部署与发布
