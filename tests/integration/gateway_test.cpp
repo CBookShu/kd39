@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <atomic>
 #include <thread>
+#include <vector>
 
 #include <boost/asio/connect.hpp>
 #include <boost/asio/io_context.hpp>
@@ -57,7 +58,7 @@ public:
         return WaitForCancellation(context);
     }
 
-    bool cancellation_observed() const { return cancellation_observed_.load(std::memory_order_acquire); }
+    int cancellation_count() const { return cancellation_count_.load(std::memory_order_acquire); }
     int request_count() const { return request_count_.load(std::memory_order_acquire); }
 
 private:
@@ -65,7 +66,7 @@ private:
         request_count_.fetch_add(1, std::memory_order_acq_rel);
         for (int i = 0; i < 300; ++i) {
             if (context->IsCancelled()) {
-                cancellation_observed_.store(true, std::memory_order_release);
+                cancellation_count_.fetch_add(1, std::memory_order_acq_rel);
                 return grpc::Status(grpc::StatusCode::CANCELLED, "cancelled_by_deadline");
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -73,7 +74,7 @@ private:
         return grpc::Status::OK;
     }
 
-    std::atomic<bool> cancellation_observed_{false};
+    std::atomic<int> cancellation_count_{0};
     std::atomic<int> request_count_{0};
 };
 }  // namespace
@@ -321,7 +322,7 @@ TEST(GatewayIntegrationTest, RouterDeadlinePropagatesCancellationToDownstream) {
 
     bool cancelled_seen = false;
     for (int i = 0; i < 50; ++i) {
-        if (cancel_aware_service.cancellation_observed()) {
+        if (cancel_aware_service.cancellation_count() > 0) {
             cancelled_seen = true;
             break;
         }
@@ -329,6 +330,53 @@ TEST(GatewayIntegrationTest, RouterDeadlinePropagatesCancellationToDownstream) {
     }
     EXPECT_TRUE(cancelled_seen);
     EXPECT_EQ(cancel_aware_service.request_count(), 1);
+
+    server->Shutdown();
+}
+
+TEST(GatewayIntegrationTest, RouterConcurrentDeadlinePropagatesCancellation) {
+    constexpr int kConcurrentRequests = 12;
+    CancelAwareUserService cancel_aware_service;
+    int selected_port = 0;
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&cancel_aware_service);
+    auto server = builder.BuildAndStart();
+    ASSERT_TRUE(server);
+
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(selected_port), "127.0.0.1:50053"},
+        nullptr,
+        kd39::gateways::access::RouterRuntimeConfig{120, 1, 0});
+
+    std::atomic<int> deadline_responses{0};
+    std::vector<std::thread> workers;
+    workers.reserve(kConcurrentRequests);
+    for (int i = 0; i < kConcurrentRequests; ++i) {
+        workers.emplace_back([&, i] {
+            kd39::common::RequestContext ctx;
+            ctx.user_id = "cancel-user-" + std::to_string(i);
+            auto result = router->RouteWithStatus("/user/get", R"({"user_id":"u1"})", ctx);
+            if (result.status_code == 504 && result.downstream_status == grpc::StatusCode::DEADLINE_EXCEEDED) {
+                deadline_responses.fetch_add(1, std::memory_order_acq_rel);
+            }
+        });
+    }
+    for (auto& t : workers) {
+        t.join();
+    }
+
+    EXPECT_EQ(deadline_responses.load(std::memory_order_acquire), kConcurrentRequests);
+
+    for (int i = 0; i < 100; ++i) {
+        if (cancel_aware_service.request_count() == kConcurrentRequests &&
+            cancel_aware_service.cancellation_count() == kConcurrentRequests) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_EQ(cancel_aware_service.request_count(), kConcurrentRequests);
+    EXPECT_EQ(cancel_aware_service.cancellation_count(), kConcurrentRequests);
 
     server->Shutdown();
 }

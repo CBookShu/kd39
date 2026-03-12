@@ -40,6 +40,8 @@ struct BenchConfig {
     int warmup = 200;
     int io_threads = 4;
     double mixed_http_ratio = 0.5;
+    int ws_read_delay_ms = 0;
+    int ws_message_interval_ms = 0;
     std::string output_file;
 };
 
@@ -87,6 +89,14 @@ bool ParseArgs(int argc, char** argv, BenchConfig* cfg) {
             const char* v = need_value("--mixed-http-ratio");
             if (!v) return false;
             cfg->mixed_http_ratio = std::clamp(std::stod(v), 0.0, 1.0);
+        } else if (arg == "--ws-read-delay-ms") {
+            const char* v = need_value("--ws-read-delay-ms");
+            if (!v) return false;
+            cfg->ws_read_delay_ms = std::max(0, std::stoi(v));
+        } else if (arg == "--ws-message-interval-ms") {
+            const char* v = need_value("--ws-message-interval-ms");
+            if (!v) return false;
+            cfg->ws_message_interval_ms = std::max(0, std::stoi(v));
         } else if (arg == "--output") {
             const char* v = need_value("--output");
             if (!v) return false;
@@ -143,7 +153,7 @@ void WarmupHttp(const std::string& host, const std::string& port, int warmup_req
     }
 }
 
-void WarmupWs(const std::string& host, const std::string& port, int warmup_requests) {
+void WarmupWs(const BenchConfig& cfg, const std::string& host, const std::string& port, int warmup_requests) {
     try {
         net::io_context ioc;
         tcp::resolver resolver(ioc);
@@ -160,7 +170,13 @@ void WarmupWs(const std::string& host, const std::string& port, int warmup_reque
                 {"body", nlohmann::json{{"nickname", "bench-ws-warmup-" + std::to_string(i)}}.dump()},
                 {"headers", nlohmann::json{{"x-request-id", "warmup-" + std::to_string(i)}}}}
                                      .dump();
+            if (cfg.ws_message_interval_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(cfg.ws_message_interval_ms));
+            }
             ws.write(net::buffer(payload));
+            if (cfg.ws_read_delay_ms > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(cfg.ws_read_delay_ms));
+            }
             beast::flat_buffer buffer;
             ws.read(buffer);
         }
@@ -172,7 +188,8 @@ void WarmupWs(const std::string& host, const std::string& port, int warmup_reque
 BenchStats RunHttpBench(const BenchConfig& cfg,
                         const std::string& host,
                         const std::string& port,
-                        bool do_warmup = true) {
+                        bool do_warmup = true,
+                        std::vector<std::uint64_t>* out_latencies = nullptr) {
     if (do_warmup && cfg.warmup > 0) {
         WarmupHttp(host, port, cfg.warmup);
     }
@@ -215,15 +232,19 @@ BenchStats RunHttpBench(const BenchConfig& cfg,
     stats.p50_us = Percentile(latencies, 0.50);
     stats.p95_us = Percentile(latencies, 0.95);
     stats.p99_us = Percentile(latencies, 0.99);
+    if (out_latencies) {
+        *out_latencies = std::move(latencies);
+    }
     return stats;
 }
 
 BenchStats RunWsBench(const BenchConfig& cfg,
                       const std::string& host,
                       const std::string& port,
-                      bool do_warmup = true) {
+                      bool do_warmup = true,
+                      std::vector<std::uint64_t>* out_latencies = nullptr) {
     if (do_warmup && cfg.warmup > 0) {
-        WarmupWs(host, port, cfg.warmup);
+        WarmupWs(cfg, host, port, cfg.warmup);
     }
     std::atomic<int> index{0};
     std::atomic<int> success{0};
@@ -256,7 +277,13 @@ BenchStats RunWsBench(const BenchConfig& cfg,
                                              .dump();
 
                     const auto start = std::chrono::steady_clock::now();
+                    if (cfg.ws_message_interval_ms > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(cfg.ws_message_interval_ms));
+                    }
                     ws.write(net::buffer(payload));
+                    if (cfg.ws_read_delay_ms > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(cfg.ws_read_delay_ms));
+                    }
                     beast::flat_buffer buffer;
                     ws.read(buffer);
                     const auto end = std::chrono::steady_clock::now();
@@ -290,6 +317,9 @@ BenchStats RunWsBench(const BenchConfig& cfg,
     stats.p50_us = Percentile(latencies, 0.50);
     stats.p95_us = Percentile(latencies, 0.95);
     stats.p99_us = Percentile(latencies, 0.99);
+    if (out_latencies) {
+        *out_latencies = std::move(latencies);
+    }
     return stats;
 }
 
@@ -297,6 +327,9 @@ struct MixedBenchStats {
     BenchStats http;
     BenchStats ws;
     double elapsed_ms = 0.0;
+    std::uint64_t p50_us = 0;
+    std::uint64_t p95_us = 0;
+    std::uint64_t p99_us = 0;
 };
 
 MixedBenchStats RunMixedBench(const BenchConfig& cfg, const std::string& host, const std::string& port) {
@@ -330,7 +363,7 @@ MixedBenchStats RunMixedBench(const BenchConfig& cfg, const std::string& host, c
         WarmupHttp(host, port, http_warmup);
     }
     if (ws_warmup > 0) {
-        WarmupWs(host, port, ws_warmup);
+        WarmupWs(cfg, host, port, ws_warmup);
     }
 
     BenchConfig http_cfg = cfg;
@@ -344,21 +377,30 @@ MixedBenchStats RunMixedBench(const BenchConfig& cfg, const std::string& host, c
     ws_cfg.warmup = 0;
 
     MixedBenchStats mixed_stats;
+    std::vector<std::uint64_t> http_latencies;
+    std::vector<std::uint64_t> ws_latencies;
     const auto begin = std::chrono::steady_clock::now();
     std::thread http_thread([&] {
         if (http_cfg.requests > 0 && http_cfg.concurrency > 0) {
-            mixed_stats.http = RunHttpBench(http_cfg, host, port, false);
+            mixed_stats.http = RunHttpBench(http_cfg, host, port, false, &http_latencies);
         }
     });
     std::thread ws_thread([&] {
         if (ws_cfg.requests > 0 && ws_cfg.concurrency > 0) {
-            mixed_stats.ws = RunWsBench(ws_cfg, host, port, false);
+            mixed_stats.ws = RunWsBench(ws_cfg, host, port, false, &ws_latencies);
         }
     });
     http_thread.join();
     ws_thread.join();
     const auto done = std::chrono::steady_clock::now();
     mixed_stats.elapsed_ms = std::chrono::duration<double, std::milli>(done - begin).count();
+    std::vector<std::uint64_t> all_latencies;
+    all_latencies.reserve(http_latencies.size() + ws_latencies.size());
+    all_latencies.insert(all_latencies.end(), http_latencies.begin(), http_latencies.end());
+    all_latencies.insert(all_latencies.end(), ws_latencies.begin(), ws_latencies.end());
+    mixed_stats.p50_us = Percentile(all_latencies, 0.50);
+    mixed_stats.p95_us = Percentile(all_latencies, 0.95);
+    mixed_stats.p99_us = Percentile(all_latencies, 0.99);
     return mixed_stats;
 }
 
@@ -381,7 +423,7 @@ int main(int argc, char** argv) {
     if (!ParseArgs(argc, argv, &cfg)) {
         std::cerr << "usage: gateway_http_ws_bench --mode http|ws|mixed "
                      "[--concurrency N] [--requests N] [--warmup N] [--io-threads N] "
-                     "[--mixed-http-ratio 0.0-1.0] [--output FILE]\n";
+                     "[--mixed-http-ratio 0.0-1.0] [--ws-read-delay-ms N] [--ws-message-interval-ms N] [--output FILE]\n";
         return 2;
     }
     kd39::common::log::SetLogLevel("warn");
@@ -419,7 +461,9 @@ int main(int argc, char** argv) {
             {"concurrency", cfg.concurrency},
             {"requests", cfg.requests},
             {"warmup", cfg.warmup},
-            {"io_threads", cfg.io_threads}};
+            {"io_threads", cfg.io_threads},
+            {"ws_read_delay_ms", cfg.ws_read_delay_ms},
+            {"ws_message_interval_ms", cfg.ws_message_interval_ms}};
         result.update(BenchStatsToJson(stats));
     } else if (cfg.mode == "ws") {
         BenchStats stats;
@@ -434,7 +478,9 @@ int main(int argc, char** argv) {
             {"concurrency", cfg.concurrency},
             {"requests", cfg.requests},
             {"warmup", cfg.warmup},
-            {"io_threads", cfg.io_threads}};
+            {"io_threads", cfg.io_threads},
+            {"ws_read_delay_ms", cfg.ws_read_delay_ms},
+            {"ws_message_interval_ms", cfg.ws_message_interval_ms}};
         result.update(BenchStatsToJson(stats));
     } else {
         const int http_requests = std::clamp(
@@ -459,6 +505,8 @@ int main(int argc, char** argv) {
             {"warmup", cfg.warmup},
             {"io_threads", cfg.io_threads},
             {"mixed_http_ratio", cfg.mixed_http_ratio},
+            {"ws_read_delay_ms", cfg.ws_read_delay_ms},
+            {"ws_message_interval_ms", cfg.ws_message_interval_ms},
             {"split", nlohmann::json{
                           {"http_requests", http_requests},
                           {"ws_requests", ws_requests}}},
@@ -466,6 +514,10 @@ int main(int argc, char** argv) {
             {"errors", total_errors},
             {"elapsed_ms", mixed_stats.elapsed_ms},
             {"qps", total_qps},
+            {"latency_us", nlohmann::json{
+                               {"p50", mixed_stats.p50_us},
+                               {"p95", mixed_stats.p95_us},
+                               {"p99", mixed_stats.p99_us}}},
             {"protocols", nlohmann::json{
                               {"http", BenchStatsToJson(mixed_stats.http)},
                               {"ws", BenchStatsToJson(mixed_stats.ws)}}}};

@@ -98,6 +98,7 @@
   - `tests/integration/gateway_async_test.cpp`
   - `bench/gateway_http_ws_bench.cpp`
   - `scripts/bench/run_http_ws_bench.sh`
+  - `scripts/bench/run_ws_stability_bench.sh`
 - `CMake`：`gateways/access_gateway/CMakeLists.txt`、`bench/CMakeLists.txt`、`tests/CMakeLists.txt`
 
 ## 测试入口与盲区
@@ -107,8 +108,8 @@
   - `gateway_async_test.cpp`（HTTP/WS 并发与结构化错误）
   - `gateway_http_ws_bench`（QPS/P50/P95/P99 基准）
 - 主要盲区：
-  - WS 长连接下的大规模心跳与背压场景仍需专项压测。
-  - 高并发下 `asio-grpc` 取消传播与尾延迟行为仍需持续专项验证。
+  - 已具备 WS 心跳/背压专项基线，但更大规模、长时运行场景仍需持续压测。
+  - 已覆盖并发取消传播回归，但 `asio-grpc` 尾延迟波动仍需持续专项验证。
 
 ## 关联文档
 

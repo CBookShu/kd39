@@ -18,6 +18,7 @@ Related docs:
   - Real WS listener with structured error response and normal route round-trip.
   - WS oversized message guard (`read_message_max`) and oversized downstream response guard (`payload_too_large`).
   - Router retry budget impact on timeout tail latency.
+  - Router concurrent deadline cancellation propagation.
 - Build note:
   - Requires GTest in the current build profile.
   - Existing CI/build profile may skip tests when GTest is unavailable.
@@ -42,9 +43,11 @@ build/linux-debug-local/bench/gateway_http_ws_bench --mode ws --concurrency 16 -
 build/linux-debug-local/bench/gateway_http_ws_bench --mode mixed --concurrency 16 --requests 1000 --warmup 100 --io-threads 4 --mixed-http-ratio 0.5
 ```
 
-## One-Click Script
+## One-Click Scripts
 
-- Script: `scripts/bench/run_http_ws_bench.sh`
+- Scripts:
+  - `scripts/bench/run_http_ws_bench.sh`
+  - `scripts/bench/run_ws_stability_bench.sh`
 - Output folder: `artifacts/bench/`
 - Default profile:
   - concurrency: 16
@@ -56,6 +59,7 @@ Run:
 
 ```bash
 scripts/bench/run_http_ws_bench.sh build/linux-debug-local
+scripts/bench/run_ws_stability_bench.sh build/linux-debug-local
 ```
 
 ## Recommended Validation Flow
@@ -79,7 +83,7 @@ build/linux-debug-local/tests/integration_tests --gtest_color=no --gtest_filter=
 
 Result:
 
-- 14 tests passed (GatewayIntegrationTest + GatewayAsyncIntegrationTest)
+- 15 tests passed (GatewayIntegrationTest + GatewayAsyncIntegrationTest)
 - No functional regression on HTTP route, WS upgrade/auth, async round-trip, structured errors, WS size-guard paths, and deadline cancellation propagation
 
 ### Performance Baseline (HTTP/WS)
@@ -92,24 +96,44 @@ scripts/bench/run_http_ws_bench.sh build/linux-debug-local
 
 Raw outputs:
 
-- `artifacts/bench/http-20260312-151815.json`
-- `artifacts/bench/ws-20260312-151815.json`
-- `artifacts/bench/mixed-20260312-151815.json`
+- `artifacts/bench/http-20260312-153310.json`
+- `artifacts/bench/ws-20260312-153310.json`
+- `artifacts/bench/mixed-20260312-153310.json`
 
 Key metrics:
 
 | Mode | Concurrency | Requests | io_threads | QPS | p50(us) | p95(us) | p99(us) | Errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| HTTP | 16 | 1000 | 4 | 2103.16 | 7247 | 10677 | 13008 | 0 |
-| WS | 16 | 1000 | 4 | 2553.77 | 6036 | 7653 | 8985 | 0 |
-| Mixed(total) | 16 | 1000 | 4 | 2316.90 | - | - | - | 0 |
+| HTTP | 16 | 1000 | 4 | 1883.69 | 8211 | 11734 | 13944 | 0 |
+| WS | 16 | 1000 | 4 | 2266.13 | 6703 | 9316 | 11984 | 0 |
+| Mixed(total) | 16 | 1000 | 4 | 2009.39 | 7603 | 10148 | 11734 | 0 |
 
 Mixed protocol split (`--mixed-http-ratio 0.5`, HTTP=500 / WS=500):
 
 | Mixed Protocol | QPS | p50(us) | p95(us) | p99(us) | Errors |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| HTTP | 1159.93 | 6769 | 8352 | 10100 | 0 |
-| WS | 1164.86 | 6599 | 8131 | 9284 | 0 |
+| HTTP | 1005.76 | 7699 | 10480 | 12302 | 0 |
+| WS | 1030.60 | 7467 | 9792 | 11055 | 0 |
+
+### WS Stability Snapshot (Heartbeat + Backpressure, 2026-03-12)
+
+Command:
+
+```bash
+scripts/bench/run_ws_stability_bench.sh build/linux-debug-local
+```
+
+Raw outputs:
+
+- `artifacts/bench/ws-heartbeat-20260312-153317.json`
+- `artifacts/bench/ws-backpressure-20260312-153317.json`
+
+Key metrics:
+
+| Profile | Concurrency | Requests | ws_message_interval_ms | ws_read_delay_ms | QPS | p50(us) | p95(us) | p99(us) | Errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| WS heartbeat | 8 | 400 | 20 | 0 | 321.67 | 24556 | 25296 | 25609 | 0 |
+| WS backpressure | 16 | 1000 | 0 | 5 | 1272.50 | 11648 | 21327 | 33868 | 0 |
 
 ### CPU/RSS Sample (same profile, `/usr/bin/time -v`)
 

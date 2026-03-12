@@ -104,7 +104,7 @@
 
 - [x] 已引入 `asio-grpc` 依赖并在 gateway 构建链路启用
 - [x] 全路由从同步 Stub 调用切换为 `agrpc::ClientRPC` 协程调用
-- [x] `integration_tests --gtest_filter='Gateway*'` 持续通过（10/10）
+- [x] `integration_tests --gtest_filter='Gateway*'` 持续通过（15/15）
 
 ### P5 稳定化与优化
 
