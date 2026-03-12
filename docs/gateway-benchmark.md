@@ -60,6 +60,62 @@ scripts/bench/run_http_ws_bench.sh build/linux-debug-local
 3. Run benchmark script and archive generated JSON reports.
 4. Compare QPS and p95/p99 latency with previous baselines.
 
+## Baseline Snapshot (2026-03-12)
+
+This snapshot is generated on local WSL2 (`linux-debug-local`) with current single-port gateway implementation.
+
+### Gateway Regression Check
+
+Command:
+
+```bash
+build/linux-debug-local/tests/integration_tests --gtest_color=no --gtest_filter='Gateway*'
+```
+
+Result:
+
+- 7 tests passed (GatewayIntegrationTest + GatewayAsyncIntegrationTest)
+- No functional regression on HTTP route, WS upgrade/auth, async round-trip and structured errors
+
+### Performance Baseline (HTTP/WS)
+
+Command:
+
+```bash
+scripts/bench/run_http_ws_bench.sh build/linux-debug-local
+```
+
+Raw outputs:
+
+- `artifacts/bench/http-20260312-110332.json`
+- `artifacts/bench/ws-20260312-110332.json`
+
+Key metrics:
+
+| Mode | Concurrency | Requests | io_threads | QPS | p50(us) | p95(us) | p99(us) | Errors |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| HTTP | 16 | 1000 | 4 | 1812.99 | 8780 | 11222 | 11908 | 0 |
+| WS | 16 | 1000 | 4 | 1877.93 | 8180 | 10124 | 11133 | 0 |
+
+### CPU/RSS Sample (same profile, `/usr/bin/time -v`)
+
+Raw outputs:
+
+- `artifacts/bench/http-20260312-110417-cpu.json`
+- `artifacts/bench/ws-20260312-110421-cpu.json`
+
+System sample:
+
+| Mode | CPU% | User(s) | Sys(s) | Max RSS(KB) |
+| --- | ---: | ---: | ---: | ---: |
+| HTTP | 275% | 1.80 | 0.62 | 31596 |
+| WS | 262% | 1.73 | 0.38 | 31004 |
+
+Note:
+
+- `time -v` reflects the benchmark process (embedded gateway + load client in one process) and is used as quick baseline only.
+- For single-port mixed-load acceptance in P2.5, keep using dedicated run records and compare against this snapshot.
+
 ## Single-Port Migration Benchmark Guidance
 
 Current benchmark entry is based on separate HTTP and WS runs. For the single-port migration plan, add a mixed-traffic comparison with the following baseline method:

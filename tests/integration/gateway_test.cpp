@@ -13,6 +13,7 @@
 #include "access_gateway/auth/auth_middleware.h"
 #include "access_gateway/http/http_server.h"
 #include "access_gateway/routing/grpc_router.h"
+#include "common/log/logger.h"
 #include "user_service_impl.h"
 #include "infrastructure/storage/mysql/connection_pool.h"
 #include "infrastructure/storage/redis/redis_client.h"
@@ -95,6 +96,108 @@ TEST(GatewayIntegrationTest, GatewayRejectsInvalidAuthAndPayload) {
     EXPECT_NE(route_not_found.find("route_not_found"), std::string::npos);
 }
 
+TEST(GatewayIntegrationTest, OpsAndAdminEndpointsWorkAsExpected) {
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:50052", "127.0.0.1:50053"},
+        nullptr,
+        kd39::gateways::access::RouterRuntimeConfig{1500, 2, 5});
+    auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
+    kd39::gateways::access::HttpServer http("127.0.0.1", 18082, router, auth);
+
+    const auto health = nlohmann::json::parse(http.HandleRequestForTesting("/health", "", ""), nullptr, false);
+    ASSERT_FALSE(health.is_discarded());
+    EXPECT_EQ(health.value("status", ""), "ok");
+    EXPECT_EQ(health.value("service", ""), "access_gateway");
+
+    const auto ready = nlohmann::json::parse(http.HandleRequestForTesting("/ready", "", ""), nullptr, false);
+    ASSERT_FALSE(ready.is_discarded());
+    EXPECT_EQ(ready.value("status", ""), "ready");
+
+    const auto unauthorized_admin = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/runtime-config", "{}", "Bearer user:test-user", {}, "GET"), nullptr, false);
+    ASSERT_FALSE(unauthorized_admin.is_discarded());
+    EXPECT_EQ(unauthorized_admin.value("error", ""), "unauthorized_admin");
+
+    const auto runtime_get = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/runtime-config", "{}", "Bearer user:dev-user", {}, "GET"), nullptr, false);
+    ASSERT_FALSE(runtime_get.is_discarded());
+    EXPECT_EQ(runtime_get.value("grpc_timeout_ms", 0), 1500);
+    EXPECT_EQ(runtime_get.value("retry_attempts", 0), 2);
+    EXPECT_EQ(runtime_get.value("retry_backoff_ms", 0), 5);
+
+    const auto runtime_post = nlohmann::json::parse(
+        http.HandleRequestForTesting(
+            "/admin/runtime-config",
+            R"({"grpc_timeout_ms":2222,"retry_attempts":3,"retry_backoff_ms":11})",
+            "Bearer user:dev-user",
+            {},
+            "POST"),
+        nullptr,
+        false);
+    ASSERT_FALSE(runtime_post.is_discarded());
+    EXPECT_EQ(runtime_post.value("grpc_timeout_ms", 0), 2222);
+    EXPECT_EQ(runtime_post.value("retry_attempts", 0), 3);
+    EXPECT_EQ(runtime_post.value("retry_backoff_ms", 0), 11);
+
+    const auto runtime_method = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/runtime-config", "{}", "Bearer user:dev-user", {}, "DELETE"), nullptr, false);
+    ASSERT_FALSE(runtime_method.is_discarded());
+    EXPECT_EQ(runtime_method.value("error", ""), "method_not_allowed");
+
+    static_cast<void>(http.HandleRequestForTesting("/unknown/path", "{}", "Bearer user:test-user"));
+    const auto metrics_payload = http.HandleRequestForTesting("/metrics", "", "");
+    EXPECT_NE(metrics_payload.find("gateway_requests_total"), std::string::npos);
+
+    kd39::gateways::access::HttpServer no_router("127.0.0.1", 18083, nullptr, auth);
+    const auto not_ready = nlohmann::json::parse(no_router.HandleRequestForTesting("/ready", "", ""), nullptr, false);
+    ASSERT_FALSE(not_ready.is_discarded());
+    EXPECT_EQ(not_ready.value("status", ""), "not_ready");
+}
+
+TEST(GatewayIntegrationTest, AdminLogLevelEndpointSupportsGetAndPost) {
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:50052", "127.0.0.1:50053"});
+    auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
+    kd39::gateways::access::HttpServer http("127.0.0.1", 18084, router, auth);
+
+    const auto original_level = kd39::common::log::GetLogLevel();
+    const std::string original_level_name(kd39::common::log::LogLevelName(original_level));
+
+    const auto unauthorized_admin = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", "{}", "Bearer user:test-user", {}, "GET"), nullptr, false);
+    ASSERT_FALSE(unauthorized_admin.is_discarded());
+    EXPECT_EQ(unauthorized_admin.value("error", ""), "unauthorized_admin");
+
+    const auto level_get = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", "{}", "Bearer user:dev-user", {}, "GET"), nullptr, false);
+    ASSERT_FALSE(level_get.is_discarded());
+    EXPECT_TRUE(level_get.contains("log_level"));
+
+    const auto invalid_json = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", "{bad-json}", "Bearer user:dev-user", {}, "POST"), nullptr, false);
+    ASSERT_FALSE(invalid_json.is_discarded());
+    EXPECT_EQ(invalid_json.value("error", ""), "invalid_json");
+
+    const auto invalid_level = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", R"({"log_level":"not-a-level"})", "Bearer user:dev-user", {}, "POST"),
+        nullptr,
+        false);
+    ASSERT_FALSE(invalid_level.is_discarded());
+    EXPECT_EQ(invalid_level.value("error", ""), "invalid_log_level");
+
+    const auto level_post = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", R"({"log_level":"warn"})", "Bearer user:dev-user", {}, "POST"), nullptr, false);
+    ASSERT_FALSE(level_post.is_discarded());
+    EXPECT_EQ(level_post.value("log_level", ""), "warn");
+
+    EXPECT_TRUE(kd39::common::log::SetLogLevel(original_level_name));
+
+    const auto level_method = nlohmann::json::parse(
+        http.HandleRequestForTesting("/admin/log-level", "{}", "Bearer user:dev-user", {}, "DELETE"), nullptr, false);
+    ASSERT_FALSE(level_method.is_discarded());
+    EXPECT_EQ(level_method.value("error", ""), "method_not_allowed");
+}
+
 TEST(GatewayIntegrationTest, RouterReturnsDeadlineExceededOnSlowDownstream) {
     SlowUserService slow_user_service;
     int selected_port = 0;
@@ -115,6 +218,34 @@ TEST(GatewayIntegrationTest, RouterReturnsDeadlineExceededOnSlowDownstream) {
     EXPECT_EQ(result.downstream_service, "user_service");
     EXPECT_NE(result.body.find("downstream_error"), std::string::npos);
     server->Shutdown();
+}
+
+TEST(GatewayIntegrationTest, WsHandshakeRejectsMissingAuthorization) {
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:50052", "127.0.0.1:50053"});
+    auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
+    kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth);
+    http_server.Start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto port = std::to_string(http_server.bound_port());
+
+    net::io_context ioc;
+    tcp::resolver resolver(ioc);
+    websocket::stream<tcp::socket> ws(ioc);
+    auto endpoints = resolver.resolve("127.0.0.1", port);
+    net::connect(ws.next_layer(), endpoints);
+
+    http::response<http::string_body> response;
+    boost::system::error_code ec;
+    ws.handshake(response, "127.0.0.1", "/", ec);
+    EXPECT_TRUE(ec);
+    EXPECT_EQ(response.result(), http::status::unauthorized);
+    EXPECT_NE(response.body().find("unauthorized"), std::string::npos);
+
+    if (ws.is_open()) {
+        ws.close(websocket::close_code::normal);
+    }
+    http_server.Stop();
 }
 
 TEST(GatewayIntegrationTest, WsUpgradeOnHttpListenerHandlesInvalidMessage) {

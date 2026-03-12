@@ -21,8 +21,14 @@
 
 - [x] 新增异步化路线与任务清单（本文件）
 - [x] 补充异步化配置项（io 线程数、cobalt/asio-grpc 实验开关）
-- [ ] 输出基线性能数据（当前同步模型 QPS/P95/P99/CPU）
-- [ ] 固化回归测试集合（HTTP/WS/路由/鉴权/管理端点）
+- [x] 输出基线性能数据（当前单端口实现 QPS/P95/P99/CPU）
+- [x] 固化回归测试集合（HTTP/WS/路由/鉴权/管理端点）
+
+#### P0 当前进度
+
+- [x] 已新增并通过 Gateway 回归用例，覆盖 `/health`、`/ready`、`/metrics`、`/admin/log-level`、`/admin/runtime-config`
+- [x] 已覆盖 WS 握手鉴权失败（缺失 `Authorization` 返回 401）与已有 WS 结构化错误路径
+- [x] `GatewayIntegrationTest + GatewayAsyncIntegrationTest` 在本地 `--gtest_filter='Gateway*'` 全部通过
 
 ### P1 Asio+Cobalt 第一阶段（先做）
 
@@ -30,7 +36,7 @@
 - [x] `accept/read/write` 改为异步链路，避免阻塞式串行处理
 - [x] 保持现有 `HandleRequest` 业务入口不变（先适配再重构）
 - [x] 增加连接超时、读写超时、异常关闭处理
-- [ ] 补充并发连接压测脚本和验证报告
+- [x] 补充并发连接压测脚本和验证报告
 
 #### Phase-1 分解步骤（执行顺序）
 
@@ -51,6 +57,7 @@
 - [x] HTTP `accept/read/write` 已迁移为协程会话模型
 - [x] 已切换到 `Boost.Cobalt task + spawn` 调度模型
 - [x] 已通过本地构建验证（无编译错误）
+- [x] 已补充基线压测快照与验证记录（见 `gateway-benchmark.md`）
 
 ### P2 WS 协程化
 
