@@ -1,17 +1,21 @@
 #include "access_gateway/routing/grpc_router.h"
 
+#include <algorithm>
+#include <chrono>
+#include <cctype>
+#include <thread>
+
 #include <grpcpp/grpcpp.h>
 #include <nlohmann/json.hpp>
 
-#include "config/config_service.grpc.pb.h"
+#include "common/log/logger.h"
 #include "framework/governance/traffic_router.h"
-#include "game/game_service.grpc.pb.h"
-#include "user/user_service.grpc.pb.h"
 #include "infrastructure/observability/metrics.h"
 #include "infrastructure/observability/telemetry.h"
 
 namespace kd39::gateways::access {
 namespace {
+
 void AddMetadata(grpc::ClientContext& grpc_ctx, const common::RequestContext& ctx) {
     if (!ctx.request_id.empty()) grpc_ctx.AddMetadata(common::RequestContext::kMetaRequestId, ctx.request_id);
     if (!ctx.trace_id.empty()) grpc_ctx.AddMetadata(common::RequestContext::kMetaTraceId, ctx.trace_id);
@@ -21,14 +25,99 @@ void AddMetadata(grpc::ClientContext& grpc_ctx, const common::RequestContext& ct
     if (!ctx.zone.empty()) grpc_ctx.AddMetadata(common::RequestContext::kMetaZone, ctx.zone);
 }
 
-nlohmann::json ErrorJson(const std::string& message) {
-    return {{"error", message}};
+nlohmann::json ErrorJson(const std::string& code, const std::string& message, int grpc_status = 0) {
+    return {{"error", message}, {"code", code}, {"grpc_status", grpc_status}};
+}
+
+std::string ToMetricSafe(std::string value) {
+    for (auto& ch : value) {
+        if (!std::isalnum(static_cast<unsigned char>(ch))) {
+            ch = '_';
+        }
+    }
+    return value;
+}
+
+int HttpStatusFromGrpc(grpc::StatusCode code) {
+    switch (code) {
+        case grpc::StatusCode::INVALID_ARGUMENT:
+            return 400;
+        case grpc::StatusCode::UNAUTHENTICATED:
+            return 401;
+        case grpc::StatusCode::PERMISSION_DENIED:
+            return 403;
+        case grpc::StatusCode::NOT_FOUND:
+            return 404;
+        case grpc::StatusCode::ALREADY_EXISTS:
+            return 409;
+        case grpc::StatusCode::FAILED_PRECONDITION:
+            return 412;
+        case grpc::StatusCode::DEADLINE_EXCEEDED:
+            return 504;
+        case grpc::StatusCode::UNAVAILABLE:
+            return 503;
+        default:
+            return 502;
+    }
+}
+
+bool IsRetryable(grpc::StatusCode code) {
+    return code == grpc::StatusCode::UNAVAILABLE || code == grpc::StatusCode::DEADLINE_EXCEEDED;
+}
+
+template <typename RpcFn>
+grpc::Status InvokeWithResilience(const common::RequestContext& ctx,
+                                  const RouterRuntimeConfig& runtime,
+                                  framework::governance::CircuitBreaker& breaker,
+                                  framework::governance::TokenBucketRateLimiter& limiter,
+                                  RpcFn&& rpc_fn) {
+    if (!limiter.Allow()) {
+        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "gateway rate limit exceeded");
+    }
+    if (!breaker.AllowRequest()) {
+        return grpc::Status(grpc::StatusCode::UNAVAILABLE, "circuit breaker open");
+    }
+
+    const int attempts = std::max(1, runtime.retry_attempts);
+    const auto timeout = std::chrono::milliseconds(std::max(100, runtime.grpc_timeout_ms));
+    const auto backoff = std::chrono::milliseconds(std::max(0, runtime.retry_backoff_ms));
+    grpc::Status last_status;
+
+    for (int attempt = 1; attempt <= attempts; ++attempt) {
+        grpc::ClientContext grpc_ctx;
+        grpc_ctx.set_deadline(std::chrono::system_clock::now() + timeout);
+        AddMetadata(grpc_ctx, ctx);
+        last_status = rpc_fn(grpc_ctx);
+        if (last_status.ok()) {
+            breaker.RecordSuccess();
+            return last_status;
+        }
+
+        breaker.RecordFailure();
+        if (!IsRetryable(last_status.error_code()) || attempt == attempts) {
+            return last_status;
+        }
+        if (backoff.count() > 0) {
+            std::this_thread::sleep_for(backoff);
+        }
+    }
+
+    return last_status;
 }
 }  // namespace
 
 GrpcRouter::GrpcRouter(RouterTargets targets,
-                       std::shared_ptr<infrastructure::coordination::ServiceResolver> resolver)
-    : targets_(std::move(targets)), resolver_(std::move(resolver)) {}
+                       std::shared_ptr<infrastructure::coordination::ServiceResolver> resolver,
+                       RouterRuntimeConfig runtime_config)
+    : targets_(std::move(targets)),
+      resolver_(std::move(resolver)),
+      runtime_config_(runtime_config),
+      config_breaker_(5, std::chrono::seconds(5)),
+      user_breaker_(5, std::chrono::seconds(5)),
+      game_breaker_(5, std::chrono::seconds(5)),
+      config_rate_limiter_(500.0, 1000.0),
+      user_rate_limiter_(500.0, 1000.0),
+      game_rate_limiter_(500.0, 1000.0) {}
 
 std::string GrpcRouter::ResolveTarget(const std::string& service_name,
                                       const std::string& fallback,
@@ -51,32 +140,78 @@ std::string GrpcRouter::ResolveTarget(const std::string& service_name,
 std::string GrpcRouter::Route(const std::string& path,
                               const std::string& body,
                               const common::RequestContext& ctx) {
+    return RouteWithStatus(path, body, ctx).body;
+}
+
+RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
+                                        const std::string& body,
+                                        const common::RequestContext& ctx) {
     auto span = kd39::infrastructure::observability::Tracer::Instance().StartSpan("gateway.grpc_route");
-    kd39::infrastructure::observability::MetricsRegistry::Instance().Increment("gateway_requests_total");
+    const auto started_at = std::chrono::steady_clock::now();
+    auto finish = [&](RouteResult result) {
+        const auto latency_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - started_at)
+                                    .count();
+        kd39::infrastructure::observability::MetricsRegistry::Instance().Increment("gateway_requests_total");
+        kd39::infrastructure::observability::MetricsRegistry::Instance().Increment(
+            "gateway_requests_route_" + ToMetricSafe(path) + "_total");
+        kd39::infrastructure::observability::MetricsRegistry::Instance().Increment(
+            "gateway_requests_status_" + std::to_string(result.status_code) + "_total");
+        if (!result.downstream_service.empty()) {
+            kd39::infrastructure::observability::MetricsRegistry::Instance().Increment(
+                "gateway_downstream_" + ToMetricSafe(result.downstream_service) + "_total");
+        }
+        if (result.status_code >= 500) {
+            KD39_LOG_WARN("gateway route path={} status={} code={} service={} latency_ms={}",
+                          path, result.status_code, result.error_code, result.downstream_service, latency_ms);
+        } else {
+            KD39_LOG_INFO("gateway route path={} status={} service={} latency_ms={}",
+                          path, result.status_code, result.downstream_service, latency_ms);
+        }
+        return result;
+    };
+
     const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
     if (json.is_discarded()) {
-        return ErrorJson("invalid_json").dump();
+        return finish({400, ErrorJson("invalid_json", "invalid_json").dump(), "invalid_json", "", grpc::StatusCode::INVALID_ARGUMENT});
     }
 
+    const auto runtime = GetRuntimeConfig();
+
     if (path == "/config/get") {
-        auto channel = grpc::CreateChannel(ResolveTarget("config_service", targets_.config_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::config::ConfigService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("config_service", targets_.config_service_target, ctx.traffic_tag);
+        auto stub = GetConfigStub(target);
         kd39::api::config::GetConfigRequest req;
         req.set_namespace_name(json.value("namespace_name", ""));
         req.set_key(json.value("key", ""));
         kd39::api::config::GetConfigResponse resp;
-        auto status = stub->GetConfig(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"namespace_name", resp.entry().namespace_name()}, {"key", resp.entry().key()}, {"value", resp.entry().value()}, {"version", resp.entry().version()}, {"environment", resp.entry().environment()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->GetConfig(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "config_service",
+                status.error_code()});
+        }
+        return finish({200,
+                       nlohmann::json{
+                           {"namespace_name", resp.entry().namespace_name()},
+                           {"key", resp.entry().key()},
+                           {"value", resp.entry().value()},
+                           {"version", resp.entry().version()},
+                           {"environment", resp.entry().environment()}}
+                           .dump(),
+                       "",
+                       "config_service",
+                       grpc::StatusCode::OK});
     }
 
     if (path == "/config/publish") {
-        auto channel = grpc::CreateChannel(ResolveTarget("config_service", targets_.config_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::config::ConfigService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("config_service", targets_.config_service_target, ctx.traffic_tag);
+        auto stub = GetConfigStub(target);
         kd39::api::config::PublishConfigRequest req;
         auto* entry = req.mutable_entry();
         entry->set_namespace_name(json.value("namespace_name", ""));
@@ -84,66 +219,187 @@ std::string GrpcRouter::Route(const std::string& path,
         entry->set_value(json.value("value", ""));
         entry->set_environment(json.value("environment", "dev"));
         kd39::api::config::PublishConfigResponse resp;
-        auto status = stub->PublishConfig(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"version", resp.version()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->PublishConfig(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "config_service",
+                status.error_code()});
+        }
+        return finish({200, nlohmann::json{{"version", resp.version()}}.dump(), "", "config_service", grpc::StatusCode::OK});
     }
 
     if (path == "/user/get") {
-        auto channel = grpc::CreateChannel(ResolveTarget("user_service", targets_.user_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::user::UserService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("user_service", targets_.user_service_target, ctx.traffic_tag);
+        auto stub = GetUserStub(target);
         kd39::api::user::GetUserRequest req;
         req.set_user_id(json.value("user_id", ctx.user_id));
         kd39::api::user::GetUserResponse resp;
-        auto status = stub->GetUser(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"user_id", resp.profile().user_id()}, {"nickname", resp.profile().nickname()}, {"avatar", resp.profile().avatar()}, {"level", resp.profile().level()}, {"created_at", resp.profile().created_at()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->GetUser(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "user_service",
+                status.error_code()});
+        }
+        return finish({200,
+                       nlohmann::json{
+                           {"user_id", resp.profile().user_id()},
+                           {"nickname", resp.profile().nickname()},
+                           {"avatar", resp.profile().avatar()},
+                           {"level", resp.profile().level()},
+                           {"created_at", resp.profile().created_at()}}
+                           .dump(),
+                       "",
+                       "user_service",
+                       grpc::StatusCode::OK});
     }
 
     if (path == "/user/create") {
-        auto channel = grpc::CreateChannel(ResolveTarget("user_service", targets_.user_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::user::UserService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("user_service", targets_.user_service_target, ctx.traffic_tag);
+        auto stub = GetUserStub(target);
         kd39::api::user::CreateUserRequest req;
         req.set_nickname(json.value("nickname", ""));
         kd39::api::user::CreateUserResponse resp;
-        auto status = stub->CreateUser(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"user_id", resp.profile().user_id()}, {"nickname", resp.profile().nickname()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->CreateUser(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "user_service",
+                status.error_code()});
+        }
+        return finish({200,
+                       nlohmann::json{{"user_id", resp.profile().user_id()}, {"nickname", resp.profile().nickname()}}.dump(),
+                       "",
+                       "user_service",
+                       grpc::StatusCode::OK});
     }
 
     if (path == "/game/create-room") {
-        auto channel = grpc::CreateChannel(ResolveTarget("game_service", targets_.game_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::game::GameService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("game_service", targets_.game_service_target, ctx.traffic_tag);
+        auto stub = GetGameStub(target);
         kd39::api::game::CreateRoomRequest req;
         req.set_room_name(json.value("room_name", ""));
         req.set_max_players(json.value("max_players", 4));
         kd39::api::game::CreateRoomResponse resp;
-        auto status = stub->CreateRoom(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"room_id", resp.room_id()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->CreateRoom(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "game_service",
+                status.error_code()});
+        }
+        return finish({200, nlohmann::json{{"room_id", resp.room_id()}}.dump(), "", "game_service", grpc::StatusCode::OK});
     }
 
     if (path == "/game/join-room") {
-        auto channel = grpc::CreateChannel(ResolveTarget("game_service", targets_.game_service_target, ctx.traffic_tag), grpc::InsecureChannelCredentials());
-        auto stub = kd39::api::game::GameService::NewStub(channel);
-        grpc::ClientContext grpc_ctx;
-        AddMetadata(grpc_ctx, ctx);
+        const auto target = ResolveTarget("game_service", targets_.game_service_target, ctx.traffic_tag);
+        auto stub = GetGameStub(target);
         kd39::api::game::JoinRoomRequest req;
         req.set_room_id(json.value("room_id", ""));
         req.set_user_id(json.value("user_id", ctx.user_id));
         kd39::api::game::JoinRoomResponse resp;
-        auto status = stub->JoinRoom(&grpc_ctx, req, &resp);
-        if (!status.ok()) return ErrorJson(status.error_message()).dump();
-        return nlohmann::json{{"success", resp.success()}}.dump();
+        const auto status = InvokeWithResilience(
+            ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"),
+            [&](grpc::ClientContext& grpc_ctx) { return stub->JoinRoom(&grpc_ctx, req, &resp); });
+        if (!status.ok()) {
+            return finish({
+                HttpStatusFromGrpc(status.error_code()),
+                ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
+                "downstream_error",
+                "game_service",
+                status.error_code()});
+        }
+        return finish({200, nlohmann::json{{"success", resp.success()}}.dump(), "", "game_service", grpc::StatusCode::OK});
     }
 
-    return ErrorJson("route_not_found").dump();
+    return finish({404, ErrorJson("route_not_found", "route_not_found").dump(), "route_not_found", "", grpc::StatusCode::NOT_FOUND});
+}
+
+RouterRuntimeConfig GrpcRouter::GetRuntimeConfig() const {
+    std::scoped_lock lock(config_mu_);
+    return runtime_config_;
+}
+
+void GrpcRouter::UpdateRuntimeConfig(const RouterRuntimeConfig& config) {
+    RouterRuntimeConfig sanitized = config;
+    sanitized.grpc_timeout_ms = std::max(100, sanitized.grpc_timeout_ms);
+    sanitized.retry_attempts = std::max(1, sanitized.retry_attempts);
+    sanitized.retry_backoff_ms = std::max(0, sanitized.retry_backoff_ms);
+    std::scoped_lock lock(config_mu_);
+    runtime_config_ = sanitized;
+}
+
+framework::governance::CircuitBreaker& GrpcRouter::BreakerFor(const std::string& service_name) {
+    if (service_name == "config_service") {
+        return config_breaker_;
+    }
+    if (service_name == "user_service") {
+        return user_breaker_;
+    }
+    return game_breaker_;
+}
+
+framework::governance::TokenBucketRateLimiter& GrpcRouter::RateLimiterFor(const std::string& service_name) {
+    if (service_name == "config_service") {
+        return config_rate_limiter_;
+    }
+    if (service_name == "user_service") {
+        return user_rate_limiter_;
+    }
+    return game_rate_limiter_;
+}
+
+std::shared_ptr<api::config::ConfigService::Stub> GrpcRouter::GetConfigStub(const std::string& target) {
+    std::scoped_lock lock(cache_mu_);
+    if (auto it = config_stubs_.find(target); it != config_stubs_.end()) {
+        return it->second;
+    }
+    auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+    auto stub = std::shared_ptr<api::config::ConfigService::Stub>(api::config::ConfigService::NewStub(channel).release());
+    channels_[target] = channel;
+    config_stubs_[target] = stub;
+    return stub;
+}
+
+std::shared_ptr<api::user::UserService::Stub> GrpcRouter::GetUserStub(const std::string& target) {
+    std::scoped_lock lock(cache_mu_);
+    if (auto it = user_stubs_.find(target); it != user_stubs_.end()) {
+        return it->second;
+    }
+    auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+    auto stub = std::shared_ptr<api::user::UserService::Stub>(api::user::UserService::NewStub(channel).release());
+    channels_[target] = channel;
+    user_stubs_[target] = stub;
+    return stub;
+}
+
+std::shared_ptr<api::game::GameService::Stub> GrpcRouter::GetGameStub(const std::string& target) {
+    std::scoped_lock lock(cache_mu_);
+    if (auto it = game_stubs_.find(target); it != game_stubs_.end()) {
+        return it->second;
+    }
+    auto channel = grpc::CreateChannel(target, grpc::InsecureChannelCredentials());
+    auto stub = std::shared_ptr<api::game::GameService::Stub>(api::game::GameService::NewStub(channel).release());
+    channels_[target] = channel;
+    game_stubs_[target] = stub;
+    return stub;
 }
 
 }  // namespace kd39::gateways::access

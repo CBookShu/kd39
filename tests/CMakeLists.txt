@@ -19,6 +19,7 @@ if(GTest_FOUND)
         integration/config_service_test.cpp
         integration/user_service_test.cpp
         integration/gateway_test.cpp
+        integration/gateway_async_test.cpp
         integration/mq_test.cpp
     )
 

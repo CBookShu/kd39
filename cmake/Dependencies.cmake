@@ -10,6 +10,7 @@ find_package(OpenSSL REQUIRED)
 # Windows and Linux.
 find_package(yaml-cpp CONFIG QUIET)
 find_package(Boost CONFIG QUIET COMPONENTS system)
+find_package(boost_cobalt CONFIG QUIET)
 
 if(KD39_ENABLE_TESTS)
     find_package(GTest CONFIG QUIET)

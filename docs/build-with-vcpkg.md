@@ -1,5 +1,11 @@
 # Build With vcpkg
 
+See also:
+
+- `README.md`
+- `agent-quickstart.md`
+- `project-overview.md`
+
 ## Prerequisites
 
 This project uses **vcpkg Manifest Mode**.

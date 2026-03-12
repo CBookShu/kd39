@@ -14,3 +14,8 @@ compile_commands.json
 CMakeUserPresets.json
 *.swp
 *~
+
+# Runtime artifacts
+logs/
+artifacts/
+*.log

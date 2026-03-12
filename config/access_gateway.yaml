@@ -1,6 +1,8 @@
 bind_host: 0.0.0.0
 http_port: 8080
 ws_port: 8081
+http_io_threads: 2
+ws_io_threads: 2
 log_dir: logs
 log_max_size_mb: 100
 log_max_files: 10
@@ -10,3 +12,11 @@ config_service_target: 127.0.0.1:50051
 user_service_target: 127.0.0.1:50052
 game_service_target: 127.0.0.1:50053
 jwt_secret: dev-secret
+jwt_issuer: kd39-dev
+jwt_audience: kd39-clients
+allow_legacy_token: true
+grpc_timeout_ms: 800
+grpc_retry_attempts: 2
+grpc_retry_backoff_ms: 50
+enable_cobalt_experimental: false
+enable_asio_grpc_experimental: false

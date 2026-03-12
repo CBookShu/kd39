@@ -1,5 +1,7 @@
 #include "common/config/app_config.h"
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <string>
 #include <unordered_map>
@@ -79,6 +81,23 @@ inline int GetOr(const FlatConfig& cfg, const std::string& key, int fallback) {
     return fallback;
 }
 
+template <>
+inline bool GetOr(const FlatConfig& cfg, const std::string& key, bool fallback) {
+    if (auto it = cfg.find(key); it != cfg.end()) {
+        auto value = it->second;
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+            return static_cast<char>(std::tolower(ch));
+        });
+        if (value == "1" || value == "true" || value == "yes" || value == "on") {
+            return true;
+        }
+        if (value == "0" || value == "false" || value == "no" || value == "off") {
+            return false;
+        }
+    }
+    return fallback;
+}
+
 }  // namespace
 
 ServiceConfig LoadServiceConfig(const std::string& path,
@@ -116,6 +135,8 @@ GatewayConfig LoadGatewayConfig(const std::string& path) {
     gateway.bind_host = GetOr(cfg, "bind_host", std::string("0.0.0.0"));
     gateway.http_port = GetOr(cfg, "http_port", static_cast<uint16_t>(8080));
     gateway.ws_port = GetOr(cfg, "ws_port", static_cast<uint16_t>(8081));
+    gateway.http_io_threads = GetOr(cfg, "http_io_threads", 2);
+    gateway.ws_io_threads = GetOr(cfg, "ws_io_threads", 2);
     gateway.log_dir = GetOr(cfg, "log_dir", std::string("logs"));
     gateway.log_max_size_mb = GetOr(cfg, "log_max_size_mb", 100);
     gateway.log_max_files = GetOr(cfg, "log_max_files", 10);
@@ -125,6 +146,14 @@ GatewayConfig LoadGatewayConfig(const std::string& path) {
     gateway.user_service_target = GetOr(cfg, "user_service_target", std::string("127.0.0.1:50052"));
     gateway.game_service_target = GetOr(cfg, "game_service_target", std::string("127.0.0.1:50053"));
     gateway.jwt_secret = GetOr(cfg, "jwt_secret", std::string("dev-secret"));
+    gateway.jwt_issuer = GetOr(cfg, "jwt_issuer", std::string());
+    gateway.jwt_audience = GetOr(cfg, "jwt_audience", std::string());
+    gateway.allow_legacy_token = GetOr(cfg, "allow_legacy_token", true);
+    gateway.grpc_timeout_ms = GetOr(cfg, "grpc_timeout_ms", 800);
+    gateway.grpc_retry_attempts = GetOr(cfg, "grpc_retry_attempts", 2);
+    gateway.grpc_retry_backoff_ms = GetOr(cfg, "grpc_retry_backoff_ms", 50);
+    gateway.enable_cobalt_experimental = GetOr(cfg, "enable_cobalt_experimental", false);
+    gateway.enable_asio_grpc_experimental = GetOr(cfg, "enable_asio_grpc_experimental", false);
     return gateway;
 }
 

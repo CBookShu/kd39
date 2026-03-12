@@ -36,6 +36,8 @@ struct GatewayConfig {
     std::string bind_host = "0.0.0.0";
     uint16_t http_port = 8080;
     uint16_t ws_port = 8081;
+    int http_io_threads = 2;
+    int ws_io_threads = 2;
     std::string log_dir = "logs";
     int log_max_size_mb = 100;
     int log_max_files = 10;
@@ -45,6 +47,14 @@ struct GatewayConfig {
     std::string user_service_target = "127.0.0.1:50052";
     std::string game_service_target = "127.0.0.1:50053";
     std::string jwt_secret = "dev-secret";
+    std::string jwt_issuer;
+    std::string jwt_audience;
+    bool allow_legacy_token = true;
+    int grpc_timeout_ms = 800;
+    int grpc_retry_attempts = 2;
+    int grpc_retry_backoff_ms = 50;
+    bool enable_cobalt_experimental = false;
+    bool enable_asio_grpc_experimental = false;
 };
 
 ServiceConfig LoadServiceConfig(const std::string& path,

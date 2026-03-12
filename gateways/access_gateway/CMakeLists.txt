@@ -22,10 +22,15 @@ target_link_libraries(access_gateway_lib
         coord_registry
         coord_etcd
         observability_core
+        OpenSSL::Crypto
 )
 
 if(TARGET Boost::system)
     target_link_libraries(access_gateway_lib PUBLIC Boost::system)
+endif()
+
+if(TARGET Boost::cobalt)
+    target_link_libraries(access_gateway_lib PUBLIC Boost::cobalt)
 endif()
 
 add_executable(access_gateway
