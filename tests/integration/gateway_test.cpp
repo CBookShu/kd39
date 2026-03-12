@@ -8,11 +8,11 @@
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
+#include <boost/beast/websocket.hpp>
 
 #include "access_gateway/auth/auth_middleware.h"
 #include "access_gateway/http/http_server.h"
 #include "access_gateway/routing/grpc_router.h"
-#include "access_gateway/ws/ws_server.h"
 #include "user_service_impl.h"
 #include "infrastructure/storage/mysql/connection_pool.h"
 #include "infrastructure/storage/redis/redis_client.h"
@@ -20,6 +20,7 @@
 namespace {
 namespace beast = boost::beast;
 namespace http = beast::http;
+namespace websocket = beast::websocket;
 namespace net = boost::asio;
 using tcp = net::ip::tcp;
 
@@ -116,14 +117,32 @@ TEST(GatewayIntegrationTest, RouterReturnsDeadlineExceededOnSlowDownstream) {
     server->Shutdown();
 }
 
-TEST(GatewayIntegrationTest, WsGatewayHandlesInvalidMessage) {
+TEST(GatewayIntegrationTest, WsUpgradeOnHttpListenerHandlesInvalidMessage) {
     auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
         kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:50052", "127.0.0.1:50053"});
     auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
-    kd39::gateways::access::WsServer ws("127.0.0.1", 18082, router, auth);
+    kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth);
+    http_server.Start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto port = std::to_string(http_server.bound_port());
 
-    const auto invalid_json = ws.HandleMessageForTesting("{bad-json", "Bearer user:test-user");
-    EXPECT_NE(invalid_json.find("invalid_json"), std::string::npos);
+    net::io_context ioc;
+    tcp::resolver resolver(ioc);
+    websocket::stream<tcp::socket> ws(ioc);
+    ws.set_option(websocket::stream_base::decorator([](websocket::request_type& req) {
+        req.set(http::field::authorization, "Bearer user:test-user");
+    }));
+    auto endpoints = resolver.resolve("127.0.0.1", port);
+    net::connect(ws.next_layer(), endpoints);
+    ws.handshake("127.0.0.1", "/");
+
+    ws.write(net::buffer(std::string("{bad-json")));
+    beast::flat_buffer buffer;
+    ws.read(buffer);
+    const auto invalid_json = beast::buffers_to_string(buffer.data());
+    EXPECT_NE(invalid_json.find("bad_request"), std::string::npos);
+    ws.close(websocket::close_code::normal);
+    http_server.Stop();
 }
 
 TEST(GatewayIntegrationTest, RealHttpListenerRespondsThroughGateway) {

@@ -17,6 +17,7 @@
 - `services/user-service-architecture.md`
 - `services/game-service-architecture.md`
 - `services/access-gateway-architecture.md`
+- `services/access-gateway-single-port-design.md`（同端口改造设计，实施前文档）
 
 每个服务文档均包含：职责边界、启动链路、请求路径、关键配置、依赖关系、可观测性、测试入口与盲区。
 
@@ -33,5 +34,6 @@
 1. `agent-quickstart.md`
 2. `project-overview.md`
 3. 进入目标服务的 `services/*-architecture.md`
+   - 若目标是网关同端口改造，继续读 `services/access-gateway-single-port-design.md`
 4. 涉及构建/运行时，再读 `build-with-vcpkg.md`
 5. 涉及网关性能/演进时，再读 `gateway-async-roadmap.md` 和 `gateway-benchmark.md`

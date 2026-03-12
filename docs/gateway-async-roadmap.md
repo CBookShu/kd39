@@ -7,6 +7,7 @@
 - `README.md`
 - `agent-quickstart.md`
 - `services/access-gateway-architecture.md`
+- `services/access-gateway-single-port-design.md`
 
 ## 总目标
 
@@ -62,6 +63,14 @@
 - [x] WS `accept/read/write` 已迁移为 `Boost.Cobalt task + spawn`
 - [x] WS 错误返回已统一为结构化 JSON（`error`/`code`/`status_code`）
 - [x] 已启用 idle timeout + keepalive ping、消息大小限制与写缓冲策略
+
+### P2.5 同端口收敛（核心已落地）
+
+- [x] 输出同端口改造设计文档（`access-gateway-single-port-design.md`）
+- [x] 将 HTTP/WS 收敛为单端口统一监听
+- [x] 在统一入口使用 `websocket::is_upgrade(req)` 分流协议
+- [x] WS 鉴权切换为握手 `Authorization`（不保留消息体 `auth_token`）
+- [ ] 输出同端口下混合流量性能对比（QPS/P95/P99/错误率）
 
 ### P3 路由层异步化（不引入 asio-grpc 前）
 

@@ -19,7 +19,6 @@
 #include "access_gateway/auth/auth_middleware.h"
 #include "access_gateway/http/http_server.h"
 #include "access_gateway/routing/grpc_router.h"
-#include "access_gateway/ws/ws_server.h"
 #include "infrastructure/storage/mysql/connection_pool.h"
 #include "infrastructure/storage/redis/redis_client.h"
 #include "user_service_impl.h"
@@ -121,10 +120,10 @@ TEST(GatewayAsyncIntegrationTest, WsListenerRoundTripAndStructuredErrors) {
     auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
         kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(selected_port), "127.0.0.1:50053"});
     auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
-    kd39::gateways::access::WsServer ws_server("127.0.0.1", 0, router, auth);
-    ws_server.Start();
+    kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth);
+    http_server.Start();
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    const auto ws_port = std::to_string(ws_server.bound_port());
+    const auto gateway_port = std::to_string(http_server.bound_port());
 
     net::io_context ioc;
     tcp::resolver resolver(ioc);
@@ -132,7 +131,7 @@ TEST(GatewayAsyncIntegrationTest, WsListenerRoundTripAndStructuredErrors) {
     ws.set_option(websocket::stream_base::decorator([](websocket::request_type& req) {
         req.set(http::field::authorization, "Bearer user:ws-user");
     }));
-    auto endpoints = resolver.resolve("127.0.0.1", ws_port);
+    auto endpoints = resolver.resolve("127.0.0.1", gateway_port);
     net::connect(ws.next_layer(), endpoints);
     ws.handshake("127.0.0.1", "/");
 
@@ -147,7 +146,6 @@ TEST(GatewayAsyncIntegrationTest, WsListenerRoundTripAndStructuredErrors) {
     }
 
     const auto request = nlohmann::json{
-        {"auth_token", "Bearer user:ws-user"},
         {"path", "/user/create"},
         {"body", R"({"nickname":"ws-load"})"},
         {"headers", nlohmann::json{{"x-request-id", "ws-1"}}}}
@@ -163,7 +161,7 @@ TEST(GatewayAsyncIntegrationTest, WsListenerRoundTripAndStructuredErrors) {
     }
 
     ws.close(websocket::close_code::normal);
-    ws_server.Stop();
+    http_server.Stop();
     grpc_server->Shutdown();
 }
 

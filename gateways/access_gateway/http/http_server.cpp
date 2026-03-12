@@ -11,6 +11,7 @@
 #include <boost/asio/redirect_error.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
+#include <boost/beast/websocket.hpp>
 #include <boost/cobalt/op.hpp>
 #include <boost/cobalt/spawn.hpp>
 #include <boost/cobalt/task.hpp>
@@ -23,11 +24,17 @@ namespace kd39::gateways::access {
 namespace {
 namespace beast = boost::beast;
 namespace http = beast::http;
+namespace websocket = beast::websocket;
 namespace net = boost::asio;
 namespace cobalt = boost::cobalt;
 using tcp = net::ip::tcp;
 constexpr auto kHttpReadTimeout = std::chrono::seconds(15);
 constexpr auto kHttpWriteTimeout = std::chrono::seconds(15);
+constexpr auto kWsIdleTimeout = std::chrono::seconds(45);
+constexpr auto kWsHandshakeTimeout = std::chrono::seconds(10);
+constexpr std::size_t kWsReadMessageMaxBytes = 64 * 1024;
+constexpr std::size_t kWsWriteBufferBytes = 16 * 1024;
+constexpr std::size_t kWsResponseMaxBytes = 128 * 1024;
 
 std::string ToLowerAscii(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -57,6 +64,14 @@ http::status ToHttpStatus(int status_code) {
         return static_cast<http::status>(status_code);
     }
     return http::status::internal_server_error;
+}
+
+std::string WsErrorJson(std::string error, std::string code, int status_code) {
+    return nlohmann::json{
+        {"error", std::move(error)},
+        {"code", std::move(code)},
+        {"status_code", status_code}}
+        .dump();
 }
 }  // namespace
 
@@ -280,6 +295,46 @@ HttpServer::HttpResponse HttpServer::HandleRequest(
     return {routed.status_code, routed.body, "application/json"};
 }
 
+std::string HttpServer::HandleWsMessage(const std::string& payload,
+                                        const std::string& authenticated_user_id) {
+    const auto json = nlohmann::json::parse(payload.empty() ? "{}" : payload, nullptr, false);
+    if (json.is_discarded()) {
+        return WsErrorJson("invalid_json", "bad_request", 400);
+    }
+
+    std::unordered_map<std::string, std::string> headers;
+    if (auto it = json.find("headers"); it != json.end() && it->is_object()) {
+        for (const auto& [key, value] : it->items()) {
+            if (value.is_string()) {
+                headers[ToLowerAscii(key)] = value.get<std::string>();
+            }
+        }
+    }
+
+    const auto generated_request_id = "gw-ws-" + std::to_string(request_seq_.fetch_add(1));
+    auto request_id = HeaderOrEmpty(headers, "x-request-id");
+    if (request_id.empty()) request_id = generated_request_id;
+    auto trace_id = HeaderOrEmpty(headers, "x-trace-id");
+    if (trace_id.empty()) trace_id = request_id;
+    auto traffic_tag = HeaderOrEmpty(headers, "x-traffic-tag");
+    if (traffic_tag.empty()) traffic_tag = "default";
+    auto client_version = HeaderOrEmpty(headers, "x-client-version");
+    if (client_version.empty()) client_version = "unknown";
+    auto zone = HeaderOrEmpty(headers, "x-zone");
+    if (zone.empty()) zone = "default";
+
+    auto ctx = BuildContextFromHeaders(request_id, trace_id, traffic_tag, client_version, zone);
+    ctx.user_id = authenticated_user_id;
+    if (!router_) {
+        return WsErrorJson("router_unavailable", "service_unavailable", 503);
+    }
+    auto routed = router_->RouteWithStatus(json.value("path", ""), json.value("body", "{}"), ctx);
+    if (routed.body.empty()) {
+        return WsErrorJson("empty_downstream_response", "bad_gateway", 502);
+    }
+    return routed.body;
+}
+
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wmismatched-new-delete"
@@ -346,6 +401,71 @@ boost::cobalt::task<void> HttpServer::HandleSession(tcp::socket socket) {
         if (ec != net::error::operation_aborted) {
             KD39_LOG_WARN("HttpServer read error: {}", ec.message());
         }
+        co_return;
+    }
+
+    if (websocket::is_upgrade(req)) {
+        auto auth_ctx = auth_ ? auth_->Authenticate(std::string(req[http::field::authorization]))
+                              : std::optional<common::RequestContext>{common::RequestContext{}};
+        if (!auth_ctx.has_value()) {
+            http::response<http::string_body> response;
+            response.result(http::status::unauthorized);
+            response.version(req.version());
+            response.set(http::field::server, "kd39-access-gateway");
+            response.set(http::field::content_type, "application/json");
+            response.body() = R"({"error":"unauthorized"})";
+            response.keep_alive(false);
+            response.prepare_payload();
+            stream.expires_after(kHttpWriteTimeout);
+            co_await http::async_write(stream, response, net::redirect_error(cobalt::use_op, ec));
+            if (ec && ec != net::error::operation_aborted) {
+                KD39_LOG_WARN("HttpServer ws unauthorized response write error: {}", ec.message());
+            }
+            try {
+                stream.socket().shutdown(tcp::socket::shutdown_both);
+            } catch (...) {
+            }
+            co_return;
+        }
+
+        websocket::stream<beast::tcp_stream> ws(std::move(stream));
+        ws.read_message_max(kWsReadMessageMaxBytes);
+        ws.write_buffer_bytes(kWsWriteBufferBytes);
+        ws.auto_fragment(true);
+        websocket::stream_base::timeout timeout_cfg{kWsHandshakeTimeout, kWsIdleTimeout, true};
+        ws.set_option(timeout_cfg);
+
+        co_await ws.async_accept(req, net::redirect_error(cobalt::use_op, ec));
+        if (ec) {
+            if (ec != net::error::operation_aborted) {
+                KD39_LOG_WARN("HttpServer ws handshake error: {}", ec.message());
+            }
+            co_return;
+        }
+
+        while (running_.load()) {
+            beast::flat_buffer ws_buffer;
+            co_await ws.async_read(ws_buffer, net::redirect_error(cobalt::use_op, ec));
+            if (ec) {
+                break;
+            }
+
+            const auto payload = beast::buffers_to_string(ws_buffer.data());
+            auto response_payload = HandleWsMessage(payload, auth_ctx->user_id);
+            if (response_payload.size() > kWsResponseMaxBytes) {
+                response_payload = WsErrorJson("response_too_large", "payload_too_large", 413);
+            }
+            ws.text(true);
+            co_await ws.async_write(net::buffer(response_payload), net::redirect_error(cobalt::use_op, ec));
+            if (ec) {
+                break;
+            }
+        }
+        if (ec && ec != websocket::error::closed && ec != net::error::operation_aborted) {
+            KD39_LOG_WARN("HttpServer ws session io error: {}", ec.message());
+        }
+        boost::system::error_code close_ec;
+        co_await ws.async_close(websocket::close_code::normal, net::redirect_error(cobalt::use_op, close_ec));
         co_return;
     }
 

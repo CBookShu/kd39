@@ -80,9 +80,9 @@ kd39/
 │   └── game_service/        # 游戏服务 (gRPC, 端口 50053)
 │
 ├── gateways/
-│   └── access_gateway/      # 统一入口网关 (HTTP 8080, WS 8081)
+│   └── access_gateway/      # 统一入口网关 (HTTP/WS 同端口 8080)
 │       ├── http/            # HttpServer (真实监听 + 测试入口复用)
-│       ├── ws/              # WsServer (真实监听 + 测试入口复用)
+│       ├── ws/              # WsServer (历史实现与测试复用)
 │       ├── auth/            # AuthMiddleware (JWT + 兼容 legacy token)
 │       ├── routing/         # GrpcRouter (路由、超时、重试、熔断、限流、连接复用)
 │       └── context/         # Header -> RequestContext 映射
@@ -159,7 +159,7 @@ ConfigSvc  UserSvc  GameSvc  MatchSvc(规划)
 | config_service | 50051 | 已实现 gRPC 接口 | GetConfig, BatchGetConfig, PublishConfig, WatchConfig |
 | user_service | 50052 | 已实现 gRPC 接口 | GetUser, CreateUser |
 | game_service | 50053 | 已实现 gRPC 接口 | CreateRoom, JoinRoom |
-| access_gateway | 8080/8081 | HTTP/WS 基础可用 + gRPC 路由 | 支持真实 HTTP/WS 监听、/health /ready /metrics、/config/* /user/* /game/* 转发 |
+| access_gateway | 8080 | HTTP/WS 同端口 + gRPC 路由 | 支持同端口 upgrade 分流、/health /ready /metrics、/config/* /user/* /game/* 转发 |
 | grpc_cli | CLI 工具 | 已实现 | 命令行调用三个服务的所有 RPC |
 
 ## 文档导航（建议先读）

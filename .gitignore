@@ -11,6 +11,7 @@ compile_commands.json
 .vs/
 .vscode/
 .idea/
+.clangd
 CMakeUserPresets.json
 *.swp
 *~

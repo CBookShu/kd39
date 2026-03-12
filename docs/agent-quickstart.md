@@ -11,6 +11,7 @@
    - 用户链路：`services/user-service-architecture.md`
    - 房间/游戏链路：`services/game-service-architecture.md`
    - HTTP/WS 接入链路：`services/access-gateway-architecture.md`
+   - 网关同端口改造方案：`services/access-gateway-single-port-design.md`
 
 ## 1. 代码总入口（先看这些路径）
 
@@ -40,11 +41,9 @@
   - `user_service`: `50052`
   - `game_service`: `50053`
 - 网关端口：
-  - HTTP: `8080`
-  - WebSocket: `8081`
+  - HTTP/WS 统一端口: `8080`
 - 网关关键配置：`config/access_gateway.yaml`
   - `http_io_threads`
-  - `ws_io_threads`
   - `grpc_timeout_ms`
   - `grpc_retry_attempts`
   - `grpc_retry_backoff_ms`
@@ -63,3 +62,4 @@
 - 构建/工具链细节：`build-with-vcpkg.md`
 - 网关异步演进计划：`gateway-async-roadmap.md`
 - 网关测试与压测：`gateway-benchmark.md`
+- 网关同端口实施前设计：`services/access-gateway-single-port-design.md`

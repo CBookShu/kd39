@@ -20,7 +20,6 @@
 #include "access_gateway/auth/auth_middleware.h"
 #include "access_gateway/http/http_server.h"
 #include "access_gateway/routing/grpc_router.h"
-#include "access_gateway/ws/ws_server.h"
 #include "common/log/logger.h"
 #include "infrastructure/storage/mysql/connection_pool.h"
 #include "infrastructure/storage/redis/redis_client.h"
@@ -151,7 +150,6 @@ void WarmupWs(const std::string& host, const std::string& port, int warmup_reque
         ws.handshake(host, "/");
         for (int i = 0; i < warmup_requests; ++i) {
             const auto payload = nlohmann::json{
-                {"auth_token", "Bearer user:bench-user"},
                 {"path", "/user/create"},
                 {"body", nlohmann::json{{"nickname", "bench-ws-warmup-" + std::to_string(i)}}.dump()},
                 {"headers", nlohmann::json{{"x-request-id", "warmup-" + std::to_string(i)}}}}
@@ -236,7 +234,6 @@ BenchStats RunWsBench(const BenchConfig& cfg, const std::string& host, const std
                     const int req_id = index.fetch_add(1);
                     if (req_id >= cfg.requests) break;
                     const auto payload = nlohmann::json{
-                        {"auth_token", "Bearer user:bench-user"},
                         {"path", "/user/create"},
                         {"body", nlohmann::json{{"nickname", "bench-ws-" + std::to_string(req_id)}}.dump()},
                         {"headers", nlohmann::json{{"x-request-id", "bench-ws-" + std::to_string(worker) + "-" + std::to_string(req_id)}}}}
@@ -318,12 +315,12 @@ int main(int argc, char** argv) {
         stats = RunHttpBench(cfg, "127.0.0.1", port);
         http_server.Stop();
     } else {
-        kd39::gateways::access::WsServer ws_server("127.0.0.1", 0, router, auth, runtime);
-        ws_server.Start();
+        kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth, runtime);
+        http_server.Start();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        const auto port = std::to_string(ws_server.bound_port());
+        const auto port = std::to_string(http_server.bound_port());
         stats = RunWsBench(cfg, "127.0.0.1", port);
-        ws_server.Stop();
+        http_server.Stop();
     }
 
     grpc_server->Shutdown();

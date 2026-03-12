@@ -134,9 +134,7 @@ GatewayConfig LoadGatewayConfig(const std::string& path) {
     GatewayConfig gateway;
     gateway.bind_host = GetOr(cfg, "bind_host", std::string("0.0.0.0"));
     gateway.http_port = GetOr(cfg, "http_port", static_cast<uint16_t>(8080));
-    gateway.ws_port = GetOr(cfg, "ws_port", static_cast<uint16_t>(8081));
     gateway.http_io_threads = GetOr(cfg, "http_io_threads", 2);
-    gateway.ws_io_threads = GetOr(cfg, "ws_io_threads", 2);
     gateway.log_dir = GetOr(cfg, "log_dir", std::string("logs"));
     gateway.log_max_size_mb = GetOr(cfg, "log_max_size_mb", 100);
     gateway.log_max_files = GetOr(cfg, "log_max_files", 10);

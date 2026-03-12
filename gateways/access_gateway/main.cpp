@@ -3,7 +3,6 @@
 #include "access_gateway/auth/auth_middleware.h"
 #include "access_gateway/http/http_server.h"
 #include "access_gateway/routing/grpc_router.h"
-#include "access_gateway/ws/ws_server.h"
 #include "common/config/app_config.h"
 #include "common/log/logger.h"
 #include "framework/app/application.h"
@@ -22,9 +21,8 @@ int main(int argc, char* argv[]) {
         true,
     });
     KD39_LOG_INFO(
-        "gateway runtime flags: http_io_threads={} ws_io_threads={} cobalt_exp={} asio_grpc_exp={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
+        "gateway runtime flags: http_io_threads={} cobalt_exp={} asio_grpc_exp={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
         cfg.http_io_threads,
-        cfg.ws_io_threads,
         cfg.enable_cobalt_experimental ? "on" : "off",
         cfg.enable_asio_grpc_experimental ? "on" : "off",
         cfg.grpc_timeout_ms,
@@ -52,18 +50,10 @@ int main(int argc, char* argv[]) {
             cfg.http_io_threads,
             cobalt_experimental,
         });
-    kd39::gateways::access::WsServer ws(
-        cfg.bind_host, cfg.ws_port, router, auth,
-        kd39::gateways::access::ServerRuntimeOptions{
-            cfg.ws_io_threads,
-            cobalt_experimental,
-        });
 
     http.Start();
-    ws.Start();
 
     app.AddShutdownHook([&] {
-        ws.Stop();
         http.Stop();
     });
     app.Run();

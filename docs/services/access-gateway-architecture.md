@@ -7,6 +7,13 @@
 - 提供运维端点：`/health`、`/ready`、`/metrics`、`/admin/log-level`、`/admin/runtime-config`。
 - 不直接承载业务数据存储，核心业务逻辑仍在 config/user/game 三个 gRPC 服务。
 
+## 同端口现状（已落地）
+
+- `main` 仅启动 `HttpServer`，统一监听 `http_port`。
+- 同一会话入口基于 `websocket::is_upgrade(req)` 分流 HTTP 与 WS。
+- WS 鉴权在握手阶段读取 `Authorization`，不再依赖消息体 `auth_token`。
+- 设计与实施背景见：`access-gateway-single-port-design.md`。
+
 ## 启动链路（main -> 依赖 -> server）
 
 1. `main` 读取 `config/access_gateway.yaml`（`LoadGatewayConfig`）。
@@ -15,8 +22,8 @@
    - `ServiceResolver`（etcd）
    - `GrpcRouter`（目标服务 + 运行时配置）
    - `AuthMiddleware`（JWT + legacy token）
-4. 构造并启动 `HttpServer` 与 `WsServer`。
-5. 注册 `Application` shutdown hook，确保 `ws.Stop()`/`http.Stop()` 有序执行。
+4. 构造并启动 `HttpServer`（同端口承载 HTTP+WS）。
+5. 注册 `Application` shutdown hook，确保 `http.Stop()` 有序执行。
 
 ## 请求路径
 
@@ -41,7 +48,6 @@
 
 单条消息 JSON 结构（核心字段）：
 
-- `auth_token`（可选；未在 upgrade 阶段读取时可放在消息体内）
 - `path`（与 HTTP 转发路径一致，如 `/user/create`）
 - `body`（字符串化 JSON，作为下游 RPC 入参）
 - `headers`（可选，支持 `x-request-id/x-trace-id/x-traffic-tag/x-client-version/x-zone`）
@@ -52,7 +58,7 @@
 
 文件：`config/access_gateway.yaml`
 
-- 监听与线程：`bind_host`、`http_port`、`ws_port`、`http_io_threads`、`ws_io_threads`
+- 监听与线程：`bind_host`、`http_port`、`http_io_threads`
 - 下游目标：`config_service_target`、`user_service_target`、`game_service_target`
 - 鉴权：`jwt_secret`、`jwt_issuer`、`jwt_audience`、`allow_legacy_token`
 - 路由治理：`grpc_timeout_ms`、`grpc_retry_attempts`、`grpc_retry_backoff_ms`
@@ -75,9 +81,9 @@
 
 ## 线程模型（当前实现）
 
-- HTTP 与 WS 都采用 `1 accept io_context + N worker io_context`。
+- 单一 listener 采用 `1 accept io_context + N worker io_context`。
 - `accept` 线程只做 `async_accept`，随后通过 round-robin 将 socket 转移到 worker。
-- worker 执行协程化会话（`Boost.Cobalt task + spawn`）完成 read/write。
+- worker 在同一入口执行 HTTP 请求处理或 WS 会话循环（upgrade 分流）。
 - 通过 `executor_work_guard` 保持 accept/worker 事件循环常驻，避免空转退出。
 
 ## 代码入口（main/impl/config/test/CMake）
@@ -111,5 +117,6 @@
 - 文档索引：`../README.md`
 - 新 Agent 入口：`../agent-quickstart.md`
 - 项目总览：`../project-overview.md`
+- 同端口改造设计：`access-gateway-single-port-design.md`
 - 演进计划：`../gateway-async-roadmap.md`
 - 验证与压测：`../gateway-benchmark.md`

@@ -7,6 +7,7 @@ Related docs:
 - `README.md`
 - `agent-quickstart.md`
 - `services/access-gateway-architecture.md`
+- `services/access-gateway-single-port-design.md`
 - `gateway-async-roadmap.md`
 
 ## Integration Tests
@@ -58,3 +59,25 @@ scripts/bench/run_http_ws_bench.sh build/linux-debug-local
 2. Run integration tests (if GTest is available).
 3. Run benchmark script and archive generated JSON reports.
 4. Compare QPS and p95/p99 latency with previous baselines.
+
+## Single-Port Migration Benchmark Guidance
+
+Current benchmark entry is based on separate HTTP and WS runs. For the single-port migration plan, add a mixed-traffic comparison with the following baseline method:
+
+1. Keep current outputs as baseline:
+   - HTTP-only (`--mode http`)
+   - WS-only (`--mode ws`)
+2. During single-port implementation phase, add a mixed profile:
+   - HTTP short requests and WS long sessions at the same time
+   - Same hardware, same build, fixed concurrency budget
+3. Record and compare:
+   - QPS (HTTP path)
+   - WS message round-trip latency (p50/p95/p99)
+   - Error rate split by protocol
+   - Tail latency regression under mixed load
+
+Recommended acceptance gate for rollout:
+
+- No functional regressions in integration tests
+- Mixed-load p99 does not regress beyond agreed threshold
+- Error rate remains stable vs. dual-port baseline

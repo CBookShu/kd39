@@ -16,6 +16,4 @@ services:
   access_gateway:
     image: kd39/access-gateway:latest
     port: 8080
-    extraPorts:
-      - 8081
     configFile: access_gateway.yaml

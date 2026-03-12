@@ -35,9 +35,7 @@ struct ServiceConfig {
 struct GatewayConfig {
     std::string bind_host = "0.0.0.0";
     uint16_t http_port = 8080;
-    uint16_t ws_port = 8081;
     int http_io_threads = 2;
-    int ws_io_threads = 2;
     std::string log_dir = "logs";
     int log_max_size_mb = 100;
     int log_max_files = 10;
