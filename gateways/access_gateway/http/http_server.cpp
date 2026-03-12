@@ -92,14 +92,9 @@ void HttpServer::Start() {
     if (running_.exchange(true)) {
         return;
     }
-    if (runtime_options_.cobalt_experimental) {
-        KD39_LOG_INFO("HttpServer cobalt task path enabled by runtime flag");
-    } else {
-        KD39_LOG_INFO("HttpServer cobalt task path active (phase-1 baseline)");
-    }
+    KD39_LOG_INFO("HttpServer cobalt task path active");
     const int io_threads = std::max(1, runtime_options_.io_threads);
-    KD39_LOG_INFO("HttpServer runtime options: io_threads={} cobalt_experimental={}",
-                  io_threads, runtime_options_.cobalt_experimental ? "on" : "off");
+    KD39_LOG_INFO("HttpServer runtime options: io_threads={}", io_threads);
 
     accept_io_context_ = std::make_unique<net::io_context>(1);
     accept_work_guard_ = std::make_unique<WorkGuard>(net::make_work_guard(*accept_io_context_));

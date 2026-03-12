@@ -17,7 +17,7 @@
 ## 启动链路（main -> 依赖 -> server）
 
 1. `main` 读取 `config/access_gateway.yaml`（`LoadGatewayConfig`）。
-2. 初始化日志并打印运行时参数（io 线程、cobalt 开关、重试参数）。
+2. 初始化日志并打印运行时参数（io 线程、重试参数）。
 3. 构造核心依赖：
    - `ServiceResolver`（etcd）
    - `GrpcRouter`（目标服务 + 运行时配置）
@@ -62,7 +62,6 @@
 - 下游目标：`config_service_target`、`user_service_target`、`game_service_target`
 - 鉴权：`jwt_secret`、`jwt_issuer`、`jwt_audience`、`allow_legacy_token`
 - 路由治理：`grpc_timeout_ms`、`grpc_retry_attempts`、`grpc_retry_backoff_ms`
-- 实验开关：`enable_cobalt_experimental`
 
 ## 依赖关系
 

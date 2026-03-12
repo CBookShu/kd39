@@ -16,4 +16,3 @@ allow_legacy_token: true
 grpc_timeout_ms: 800
 grpc_retry_attempts: 2
 grpc_retry_backoff_ms: 50
-enable_cobalt_experimental: false

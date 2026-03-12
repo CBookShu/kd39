@@ -304,7 +304,7 @@ int main(int argc, char** argv) {
     auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
         kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(grpc_port), "127.0.0.1:50053"});
     auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
-    const kd39::gateways::access::ServerRuntimeOptions runtime{cfg.io_threads, false};
+    const kd39::gateways::access::ServerRuntimeOptions runtime{cfg.io_threads};
 
     BenchStats stats;
     if (cfg.mode == "http") {

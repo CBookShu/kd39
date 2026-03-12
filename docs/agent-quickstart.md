@@ -47,7 +47,6 @@
   - `grpc_timeout_ms`
   - `grpc_retry_attempts`
   - `grpc_retry_backoff_ms`
-  - `enable_cobalt_experimental`
 
 ## 4. 执行改动前的最小核对
 

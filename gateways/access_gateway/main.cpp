@@ -21,9 +21,8 @@ int main(int argc, char* argv[]) {
         true,
     });
     KD39_LOG_INFO(
-        "gateway runtime flags: http_io_threads={} cobalt_exp={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
+        "gateway runtime flags: http_io_threads={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
         cfg.http_io_threads,
-        cfg.enable_cobalt_experimental ? "on" : "off",
         cfg.grpc_timeout_ms,
         cfg.grpc_retry_attempts,
         cfg.grpc_retry_backoff_ms);
@@ -42,12 +41,10 @@ int main(int argc, char* argv[]) {
             cfg.allow_legacy_token,
         });
 
-    const auto cobalt_experimental = cfg.enable_cobalt_experimental;
     kd39::gateways::access::HttpServer http(
         cfg.bind_host, cfg.http_port, router, auth,
         kd39::gateways::access::ServerRuntimeOptions{
             cfg.http_io_threads,
-            cobalt_experimental,
         });
 
     http.Start();

@@ -51,7 +51,6 @@ struct GatewayConfig {
     int grpc_timeout_ms = 800;
     int grpc_retry_attempts = 2;
     int grpc_retry_backoff_ms = 50;
-    bool enable_cobalt_experimental = false;
 };
 
 ServiceConfig LoadServiceConfig(const std::string& path,

@@ -18,7 +18,6 @@ namespace kd39::gateways::access {
 
 struct ServerRuntimeOptions {
     int io_threads = 1;
-    bool cobalt_experimental = false;
 };
 
 class HttpServer {
