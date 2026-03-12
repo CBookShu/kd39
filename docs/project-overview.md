@@ -81,8 +81,7 @@ kd39/
 │
 ├── gateways/
 │   └── access_gateway/      # 统一入口网关 (HTTP/WS 同端口 8080)
-│       ├── http/            # HttpServer (真实监听 + 测试入口复用)
-│       ├── ws/              # WsServer (历史实现与测试复用)
+│       ├── http/            # HttpServer (真实监听 + WS upgrade 分流)
 │       ├── auth/            # AuthMiddleware (JWT + 兼容 legacy token)
 │       ├── routing/         # GrpcRouter (路由、超时、重试、熔断、限流、连接复用)
 │       └── context/         # Header -> RequestContext 映射

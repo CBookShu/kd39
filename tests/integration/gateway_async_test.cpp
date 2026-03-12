@@ -165,4 +165,107 @@ TEST(GatewayAsyncIntegrationTest, WsListenerRoundTripAndStructuredErrors) {
     grpc_server->Shutdown();
 }
 
+TEST(GatewayAsyncIntegrationTest, WsListenerRejectsOversizedMessage) {
+    auto mysql = kd39::infrastructure::storage::mysql::ConnectionPool::Create({"127.0.0.1", 3306, "root", "", "kd39", 2});
+    auto redis = kd39::infrastructure::storage::redis::RedisClient::Create({"127.0.0.1", 6379, "", 0, 2});
+    kd39::services::user::UserServiceImpl user_service({mysql, redis});
+
+    int selected_port = 0;
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&user_service);
+    auto grpc_server = builder.BuildAndStart();
+    ASSERT_TRUE(grpc_server);
+
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(selected_port), "127.0.0.1:50053"});
+    auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
+    kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth);
+    http_server.Start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto gateway_port = std::to_string(http_server.bound_port());
+
+    net::io_context ioc;
+    tcp::resolver resolver(ioc);
+    websocket::stream<tcp::socket> ws(ioc);
+    ws.set_option(websocket::stream_base::decorator([](websocket::request_type& req) {
+        req.set(http::field::authorization, "Bearer user:ws-user");
+    }));
+    auto endpoints = resolver.resolve("127.0.0.1", gateway_port);
+    net::connect(ws.next_layer(), endpoints);
+    ws.handshake("127.0.0.1", "/");
+
+    const std::string oversized_payload(70 * 1024, 'x');
+    ws.write(net::buffer(oversized_payload));
+
+    beast::flat_buffer buffer;
+    boost::system::error_code read_ec;
+    ws.read(buffer, read_ec);
+    EXPECT_TRUE(static_cast<bool>(read_ec));
+
+    if (ws.is_open()) {
+        boost::system::error_code close_ec;
+        ws.close(websocket::close_code::normal, close_ec);
+    }
+    http_server.Stop();
+    grpc_server->Shutdown();
+}
+
+TEST(GatewayAsyncIntegrationTest, WsListenerReturnsPayloadTooLargeForHugeDownstreamResponse) {
+    auto mysql = kd39::infrastructure::storage::mysql::ConnectionPool::Create({"127.0.0.1", 3306, "root", "", "kd39", 2});
+    auto redis = kd39::infrastructure::storage::redis::RedisClient::Create({"127.0.0.1", 6379, "", 0, 2});
+    kd39::services::user::UserServiceImpl user_service({mysql, redis});
+
+    kd39::api::user::CreateUserRequest create_req;
+    create_req.set_nickname(std::string(130 * 1024, 'n'));
+    kd39::api::user::CreateUserResponse create_resp;
+    grpc::ServerContext create_ctx;
+    ASSERT_TRUE(user_service.CreateUser(&create_ctx, &create_req, &create_resp).ok());
+    ASSERT_FALSE(create_resp.profile().user_id().empty());
+
+    int selected_port = 0;
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&user_service);
+    auto grpc_server = builder.BuildAndStart();
+    ASSERT_TRUE(grpc_server);
+
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(selected_port), "127.0.0.1:50053"});
+    auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
+    kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth);
+    http_server.Start();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto gateway_port = std::to_string(http_server.bound_port());
+
+    net::io_context ioc;
+    tcp::resolver resolver(ioc);
+    websocket::stream<tcp::socket> ws(ioc);
+    ws.set_option(websocket::stream_base::decorator([](websocket::request_type& req) {
+        req.set(http::field::authorization, "Bearer user:ws-user");
+    }));
+    auto endpoints = resolver.resolve("127.0.0.1", gateway_port);
+    net::connect(ws.next_layer(), endpoints);
+    ws.handshake("127.0.0.1", "/");
+
+    const auto request = nlohmann::json{
+        {"path", "/user/get"},
+        {"body", nlohmann::json{{"user_id", create_resp.profile().user_id()}}.dump()},
+        {"headers", nlohmann::json{{"x-request-id", "ws-large-response"}}}}
+                             .dump();
+    ws.write(net::buffer(request));
+
+    beast::flat_buffer buffer;
+    ws.read(buffer);
+    const auto resp = beast::buffers_to_string(buffer.data());
+    const auto json = nlohmann::json::parse(resp, nullptr, false);
+    ASSERT_FALSE(json.is_discarded());
+    EXPECT_EQ(json.value("code", ""), "payload_too_large");
+    EXPECT_EQ(json.value("status_code", 0), 413);
+
+    ws.close(websocket::close_code::normal);
+    http_server.Stop();
+    grpc_server->Shutdown();
+}
+
 #endif  // __has_include(<gtest/gtest.h>)

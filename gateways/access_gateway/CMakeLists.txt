@@ -1,6 +1,5 @@
 add_library(access_gateway_lib STATIC
     http/http_server.cpp
-    ws/ws_server.cpp
     auth/auth_middleware.cpp
     routing/grpc_router.cpp
     context/gateway_context.cpp

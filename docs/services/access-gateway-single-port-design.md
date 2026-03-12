@@ -7,7 +7,7 @@
 - 目标：将 `access_gateway` 从“HTTP/WS 双端口双监听”收敛为“同端口统一监听”。
 - 方案：同一 listener 接入后，基于 `websocket::is_upgrade(req)` 分流 HTTP 与 WS。
 - 鉴权：采用最佳路径，WS 仅使用握手 `Authorization`，不保留消息体 `auth_token` 兼容逻辑。
-- 本文档只定义实施方案与验证口径，不代表当前实现状态。
+- 本文档记录已落地方案与验证口径，作为后续优化基线。
 
 ## 改造前基线（历史）
 
@@ -53,7 +53,7 @@ flowchart TD
 - 运行期消息：不再承载 `auth_token`。
 - 失败语义：握手鉴权失败时拒绝建立 WS 会话。
 
-## 拟改动范围（实施时）
+## 已改动范围（已落地）
 
 ### 配置与入口
 
@@ -65,7 +65,7 @@ flowchart TD
 ### 网关实现
 
 - `gateways/access_gateway/http/http_server.h/.cpp`（新增 upgrade 分流与 WS 会话处理）
-- `gateways/access_gateway/ws/ws_server.h/.cpp`（按最终方案收敛/复用或下线）
+- `gateways/access_gateway/ws/ws_server.h/.cpp`（已下线，逻辑收敛到 `http_server`）
 - `gateways/access_gateway/auth/auth_middleware.h/.cpp`
 - `gateways/access_gateway/routing/grpc_router.h/.cpp`
 
@@ -116,7 +116,8 @@ flowchart TD
   - 握手鉴权收口后，客户端必须同步发送 `Authorization`。
   - 部署层若遗漏端口变更，容易出现环境不一致。
 - 回滚：
-  - 保留双端口启动路径分支，单端口方案以开关方式灰度启用。
+  - 当前仓库不再保留双端口运行路径，若需回退请基于历史提交或分支恢复。
+  - 回滚前需同步恢复配置模板、部署端口暴露和回归用例口径。
   - 基于 benchmark 与错误率阈值决定是否继续放量。
 
 ## 关联文档

@@ -16,6 +16,8 @@ Related docs:
 - Scope:
   - Real HTTP listener with concurrent requests.
   - Real WS listener with structured error response and normal route round-trip.
+  - WS oversized message guard (`read_message_max`) and oversized downstream response guard (`payload_too_large`).
+  - Router retry budget impact on timeout tail latency.
 - Build note:
   - Requires GTest in the current build profile.
   - Existing CI/build profile may skip tests when GTest is unavailable.
@@ -57,7 +59,7 @@ scripts/bench/run_http_ws_bench.sh build/linux-debug-local
 
 1. Build `linux-debug-local`.
 2. Run integration tests (if GTest is available).
-3. Run benchmark script and archive generated JSON reports.
+3. (Optional) Run benchmark script and archive generated JSON reports.
 4. Compare QPS and p95/p99 latency with previous baselines.
 
 ## Baseline Snapshot (2026-03-12)
@@ -74,8 +76,8 @@ build/linux-debug-local/tests/integration_tests --gtest_color=no --gtest_filter=
 
 Result:
 
-- 7 tests passed (GatewayIntegrationTest + GatewayAsyncIntegrationTest)
-- No functional regression on HTTP route, WS upgrade/auth, async round-trip and structured errors
+- 14 tests passed (GatewayIntegrationTest + GatewayAsyncIntegrationTest)
+- No functional regression on HTTP route, WS upgrade/auth, async round-trip, structured errors, WS size-guard paths, and deadline cancellation propagation
 
 ### Performance Baseline (HTTP/WS)
 

@@ -1,6 +1,7 @@
 #include <grpcpp/grpcpp.h>
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
+#include <atomic>
 #include <thread>
 
 #include <boost/asio/connect.hpp>
@@ -40,6 +41,40 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         return grpc::Status::OK;
     }
+};
+
+class CancelAwareUserService final : public kd39::api::user::UserService::Service {
+public:
+    grpc::Status GetUser(grpc::ServerContext* context,
+                         const kd39::api::user::GetUserRequest*,
+                         kd39::api::user::GetUserResponse*) override {
+        return WaitForCancellation(context);
+    }
+
+    grpc::Status CreateUser(grpc::ServerContext* context,
+                            const kd39::api::user::CreateUserRequest*,
+                            kd39::api::user::CreateUserResponse*) override {
+        return WaitForCancellation(context);
+    }
+
+    bool cancellation_observed() const { return cancellation_observed_.load(std::memory_order_acquire); }
+    int request_count() const { return request_count_.load(std::memory_order_acquire); }
+
+private:
+    grpc::Status WaitForCancellation(grpc::ServerContext* context) {
+        request_count_.fetch_add(1, std::memory_order_acq_rel);
+        for (int i = 0; i < 300; ++i) {
+            if (context->IsCancelled()) {
+                cancellation_observed_.store(true, std::memory_order_release);
+                return grpc::Status(grpc::StatusCode::CANCELLED, "cancelled_by_deadline");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return grpc::Status::OK;
+    }
+
+    std::atomic<bool> cancellation_observed_{false};
+    std::atomic<int> request_count_{0};
 };
 }  // namespace
 
@@ -217,6 +252,84 @@ TEST(GatewayIntegrationTest, RouterReturnsDeadlineExceededOnSlowDownstream) {
     EXPECT_EQ(result.status_code, 504);
     EXPECT_EQ(result.downstream_service, "user_service");
     EXPECT_NE(result.body.find("downstream_error"), std::string::npos);
+    server->Shutdown();
+}
+
+TEST(GatewayIntegrationTest, RouterRetryBudgetAffectsTailLatency) {
+    SlowUserService slow_user_service;
+    int selected_port = 0;
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&slow_user_service);
+    auto server = builder.BuildAndStart();
+    ASSERT_TRUE(server);
+
+    const auto target = "127.0.0.1:" + std::to_string(selected_port);
+    kd39::common::RequestContext ctx;
+    ctx.user_id = "test-user";
+
+    const auto measure_elapsed_ms = [&](kd39::gateways::access::RouterRuntimeConfig runtime_cfg) {
+        auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+            kd39::gateways::access::RouterTargets{"127.0.0.1:50051", target, "127.0.0.1:50053"},
+            nullptr,
+            runtime_cfg);
+        const auto start = std::chrono::steady_clock::now();
+        auto result = router->RouteWithStatus("/user/get", R"({"user_id":"u1"})", ctx);
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+        EXPECT_EQ(result.status_code, 504);
+        EXPECT_EQ(result.downstream_service, "user_service");
+        return elapsed_ms;
+    };
+
+    const auto single_attempt_ms = measure_elapsed_ms(kd39::gateways::access::RouterRuntimeConfig{100, 1, 0});
+    const auto multi_attempt_ms = measure_elapsed_ms(kd39::gateways::access::RouterRuntimeConfig{100, 3, 20});
+
+    EXPECT_GE(single_attempt_ms, 80);
+    EXPECT_LT(single_attempt_ms, 400);
+    EXPECT_GE(multi_attempt_ms, single_attempt_ms + 120);
+    EXPECT_LT(multi_attempt_ms, 1200);
+
+    server->Shutdown();
+}
+
+TEST(GatewayIntegrationTest, RouterDeadlinePropagatesCancellationToDownstream) {
+    CancelAwareUserService cancel_aware_service;
+    int selected_port = 0;
+    grpc::ServerBuilder builder;
+    builder.AddListeningPort("127.0.0.1:0", grpc::InsecureServerCredentials(), &selected_port);
+    builder.RegisterService(&cancel_aware_service);
+    auto server = builder.BuildAndStart();
+    ASSERT_TRUE(server);
+
+    auto router = std::make_shared<kd39::gateways::access::GrpcRouter>(
+        kd39::gateways::access::RouterTargets{"127.0.0.1:50051", "127.0.0.1:" + std::to_string(selected_port), "127.0.0.1:50053"},
+        nullptr,
+        kd39::gateways::access::RouterRuntimeConfig{100, 1, 0});
+    kd39::common::RequestContext ctx;
+    ctx.user_id = "test-user";
+
+    const auto start = std::chrono::steady_clock::now();
+    auto result = router->RouteWithStatus("/user/get", R"({"user_id":"u1"})", ctx);
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+
+    EXPECT_EQ(result.status_code, 504);
+    EXPECT_EQ(result.downstream_service, "user_service");
+    EXPECT_EQ(result.downstream_status, grpc::StatusCode::DEADLINE_EXCEEDED);
+    EXPECT_GE(elapsed_ms, 80);
+    EXPECT_LT(elapsed_ms, 400);
+
+    bool cancelled_seen = false;
+    for (int i = 0; i < 50; ++i) {
+        if (cancel_aware_service.cancellation_observed()) {
+            cancelled_seen = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    EXPECT_TRUE(cancelled_seen);
+    EXPECT_EQ(cancel_aware_service.request_count(), 1);
+
     server->Shutdown();
 }
 
