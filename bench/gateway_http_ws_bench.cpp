@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <grpcpp/grpcpp.h>
@@ -38,6 +39,7 @@ struct BenchConfig {
     int requests = 2000;
     int warmup = 200;
     int io_threads = 4;
+    double mixed_http_ratio = 0.5;
     std::string output_file;
 };
 
@@ -81,6 +83,10 @@ bool ParseArgs(int argc, char** argv, BenchConfig* cfg) {
             const char* v = need_value("--io-threads");
             if (!v) return false;
             cfg->io_threads = std::max(1, std::stoi(v));
+        } else if (arg == "--mixed-http-ratio") {
+            const char* v = need_value("--mixed-http-ratio");
+            if (!v) return false;
+            cfg->mixed_http_ratio = std::clamp(std::stod(v), 0.0, 1.0);
         } else if (arg == "--output") {
             const char* v = need_value("--output");
             if (!v) return false;
@@ -92,7 +98,7 @@ bool ParseArgs(int argc, char** argv, BenchConfig* cfg) {
             return false;
         }
     }
-    return cfg->mode == "http" || cfg->mode == "ws";
+    return cfg->mode == "http" || cfg->mode == "ws" || cfg->mode == "mixed";
 }
 
 std::uint64_t Percentile(std::vector<std::uint64_t> values, double pct) {
@@ -163,8 +169,13 @@ void WarmupWs(const std::string& host, const std::string& port, int warmup_reque
     }
 }
 
-BenchStats RunHttpBench(const BenchConfig& cfg, const std::string& host, const std::string& port) {
-    WarmupHttp(host, port, cfg.warmup);
+BenchStats RunHttpBench(const BenchConfig& cfg,
+                        const std::string& host,
+                        const std::string& port,
+                        bool do_warmup = true) {
+    if (do_warmup && cfg.warmup > 0) {
+        WarmupHttp(host, port, cfg.warmup);
+    }
     std::atomic<int> index{0};
     std::atomic<int> success{0};
     std::atomic<int> errors{0};
@@ -207,8 +218,13 @@ BenchStats RunHttpBench(const BenchConfig& cfg, const std::string& host, const s
     return stats;
 }
 
-BenchStats RunWsBench(const BenchConfig& cfg, const std::string& host, const std::string& port) {
-    WarmupWs(host, port, cfg.warmup);
+BenchStats RunWsBench(const BenchConfig& cfg,
+                      const std::string& host,
+                      const std::string& port,
+                      bool do_warmup = true) {
+    if (do_warmup && cfg.warmup > 0) {
+        WarmupWs(host, port, cfg.warmup);
+    }
     std::atomic<int> index{0};
     std::atomic<int> success{0};
     std::atomic<int> errors{0};
@@ -276,13 +292,96 @@ BenchStats RunWsBench(const BenchConfig& cfg, const std::string& host, const std
     stats.p99_us = Percentile(latencies, 0.99);
     return stats;
 }
+
+struct MixedBenchStats {
+    BenchStats http;
+    BenchStats ws;
+    double elapsed_ms = 0.0;
+};
+
+MixedBenchStats RunMixedBench(const BenchConfig& cfg, const std::string& host, const std::string& port) {
+    const int http_requests = std::clamp(
+        static_cast<int>(std::llround(static_cast<double>(cfg.requests) * cfg.mixed_http_ratio)),
+        0,
+        cfg.requests);
+    const int ws_requests = std::max(0, cfg.requests - http_requests);
+
+    int http_concurrency = std::clamp(
+        static_cast<int>(std::llround(static_cast<double>(cfg.concurrency) * cfg.mixed_http_ratio)),
+        0,
+        cfg.concurrency);
+    int ws_concurrency = std::max(0, cfg.concurrency - http_concurrency);
+
+    if (http_requests > 0 && http_concurrency == 0) {
+        http_concurrency = 1;
+        if (ws_concurrency > 0) --ws_concurrency;
+    }
+    if (ws_requests > 0 && ws_concurrency == 0) {
+        ws_concurrency = 1;
+        if (http_concurrency > 0) --http_concurrency;
+    }
+
+    const int http_warmup = std::clamp(
+        static_cast<int>(std::llround(static_cast<double>(cfg.warmup) * cfg.mixed_http_ratio)),
+        0,
+        cfg.warmup);
+    const int ws_warmup = std::max(0, cfg.warmup - http_warmup);
+    if (http_warmup > 0) {
+        WarmupHttp(host, port, http_warmup);
+    }
+    if (ws_warmup > 0) {
+        WarmupWs(host, port, ws_warmup);
+    }
+
+    BenchConfig http_cfg = cfg;
+    http_cfg.requests = http_requests;
+    http_cfg.concurrency = http_concurrency;
+    http_cfg.warmup = 0;
+
+    BenchConfig ws_cfg = cfg;
+    ws_cfg.requests = ws_requests;
+    ws_cfg.concurrency = ws_concurrency;
+    ws_cfg.warmup = 0;
+
+    MixedBenchStats mixed_stats;
+    const auto begin = std::chrono::steady_clock::now();
+    std::thread http_thread([&] {
+        if (http_cfg.requests > 0 && http_cfg.concurrency > 0) {
+            mixed_stats.http = RunHttpBench(http_cfg, host, port, false);
+        }
+    });
+    std::thread ws_thread([&] {
+        if (ws_cfg.requests > 0 && ws_cfg.concurrency > 0) {
+            mixed_stats.ws = RunWsBench(ws_cfg, host, port, false);
+        }
+    });
+    http_thread.join();
+    ws_thread.join();
+    const auto done = std::chrono::steady_clock::now();
+    mixed_stats.elapsed_ms = std::chrono::duration<double, std::milli>(done - begin).count();
+    return mixed_stats;
+}
+
+nlohmann::json BenchStatsToJson(const BenchStats& stats) {
+    return nlohmann::json{
+        {"success", stats.success},
+        {"errors", stats.errors},
+        {"elapsed_ms", stats.elapsed_ms},
+        {"qps", stats.qps},
+        {"latency_us",
+         nlohmann::json{
+             {"p50", stats.p50_us},
+             {"p95", stats.p95_us},
+             {"p99", stats.p99_us}}}};
+}
 }  // namespace
 
 int main(int argc, char** argv) {
     BenchConfig cfg;
     if (!ParseArgs(argc, argv, &cfg)) {
-        std::cerr << "usage: gateway_http_ws_bench --mode http|ws "
-                     "[--concurrency N] [--requests N] [--warmup N] [--io-threads N] [--output FILE]\n";
+        std::cerr << "usage: gateway_http_ws_bench --mode http|ws|mixed "
+                     "[--concurrency N] [--requests N] [--warmup N] [--io-threads N] "
+                     "[--mixed-http-ratio 0.0-1.0] [--output FILE]\n";
         return 2;
     }
     kd39::common::log::SetLogLevel("warn");
@@ -306,39 +405,73 @@ int main(int argc, char** argv) {
     auto auth = std::make_shared<kd39::gateways::access::AuthMiddleware>();
     const kd39::gateways::access::ServerRuntimeOptions runtime{cfg.io_threads};
 
-    BenchStats stats;
+    nlohmann::json result;
     if (cfg.mode == "http") {
+        BenchStats stats;
         kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth, runtime);
         http_server.Start();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const auto port = std::to_string(http_server.bound_port());
         stats = RunHttpBench(cfg, "127.0.0.1", port);
         http_server.Stop();
-    } else {
+        result = nlohmann::json{
+            {"mode", cfg.mode},
+            {"concurrency", cfg.concurrency},
+            {"requests", cfg.requests},
+            {"warmup", cfg.warmup},
+            {"io_threads", cfg.io_threads}};
+        result.update(BenchStatsToJson(stats));
+    } else if (cfg.mode == "ws") {
+        BenchStats stats;
         kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth, runtime);
         http_server.Start();
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         const auto port = std::to_string(http_server.bound_port());
         stats = RunWsBench(cfg, "127.0.0.1", port);
         http_server.Stop();
+        result = nlohmann::json{
+            {"mode", cfg.mode},
+            {"concurrency", cfg.concurrency},
+            {"requests", cfg.requests},
+            {"warmup", cfg.warmup},
+            {"io_threads", cfg.io_threads}};
+        result.update(BenchStatsToJson(stats));
+    } else {
+        const int http_requests = std::clamp(
+            static_cast<int>(std::llround(static_cast<double>(cfg.requests) * cfg.mixed_http_ratio)),
+            0,
+            cfg.requests);
+        const int ws_requests = std::max(0, cfg.requests - http_requests);
+        kd39::gateways::access::HttpServer http_server("127.0.0.1", 0, router, auth, runtime);
+        http_server.Start();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        const auto port = std::to_string(http_server.bound_port());
+        const auto mixed_stats = RunMixedBench(cfg, "127.0.0.1", port);
+        http_server.Stop();
+        const int total_success = mixed_stats.http.success + mixed_stats.ws.success;
+        const int total_errors = mixed_stats.http.errors + mixed_stats.ws.errors;
+        const double total_qps =
+            mixed_stats.elapsed_ms > 0.0 ? (static_cast<double>(total_success) * 1000.0 / mixed_stats.elapsed_ms) : 0.0;
+        result = nlohmann::json{
+            {"mode", cfg.mode},
+            {"concurrency", cfg.concurrency},
+            {"requests", cfg.requests},
+            {"warmup", cfg.warmup},
+            {"io_threads", cfg.io_threads},
+            {"mixed_http_ratio", cfg.mixed_http_ratio},
+            {"split", nlohmann::json{
+                          {"http_requests", http_requests},
+                          {"ws_requests", ws_requests}}},
+            {"success", total_success},
+            {"errors", total_errors},
+            {"elapsed_ms", mixed_stats.elapsed_ms},
+            {"qps", total_qps},
+            {"protocols", nlohmann::json{
+                              {"http", BenchStatsToJson(mixed_stats.http)},
+                              {"ws", BenchStatsToJson(mixed_stats.ws)}}}};
     }
 
     grpc_server->Shutdown();
-
-    const auto result = nlohmann::json{
-        {"mode", cfg.mode},
-        {"concurrency", cfg.concurrency},
-        {"requests", cfg.requests},
-        {"warmup", cfg.warmup},
-        {"io_threads", cfg.io_threads},
-        {"success", stats.success},
-        {"errors", stats.errors},
-        {"elapsed_ms", stats.elapsed_ms},
-        {"qps", stats.qps},
-        {"latency_us", nlohmann::json{
-                           {"p50", stats.p50_us},
-                           {"p95", stats.p95_us},
-                           {"p99", stats.p99_us}}}};
 
     if (!cfg.output_file.empty()) {
         std::ofstream out(cfg.output_file);

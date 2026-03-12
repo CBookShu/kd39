@@ -29,6 +29,7 @@ Related docs:
 - Run modes:
   - `--mode http`: HTTP request benchmark (`/user/create`)
   - `--mode ws`: WS message round-trip benchmark (`/user/create`)
+  - `--mode mixed`: HTTP+WS mixed benchmark on single port (default split by `--mixed-http-ratio 0.5`)
 - Output:
   - JSON summary to stdout
   - Optional `--output <file>` for report persistence
@@ -38,6 +39,7 @@ Example:
 ```bash
 build/linux-debug-local/bench/gateway_http_ws_bench --mode http --concurrency 16 --requests 1000 --warmup 100 --io-threads 4
 build/linux-debug-local/bench/gateway_http_ws_bench --mode ws --concurrency 16 --requests 1000 --warmup 100 --io-threads 4
+build/linux-debug-local/bench/gateway_http_ws_bench --mode mixed --concurrency 16 --requests 1000 --warmup 100 --io-threads 4 --mixed-http-ratio 0.5
 ```
 
 ## One-Click Script
@@ -48,6 +50,7 @@ build/linux-debug-local/bench/gateway_http_ws_bench --mode ws --concurrency 16 -
   - concurrency: 16
   - requests: 1000
   - warmup: 100
+  - mixed-http-ratio: 0.5
 
 Run:
 
@@ -89,15 +92,24 @@ scripts/bench/run_http_ws_bench.sh build/linux-debug-local
 
 Raw outputs:
 
-- `artifacts/bench/http-20260312-110332.json`
-- `artifacts/bench/ws-20260312-110332.json`
+- `artifacts/bench/http-20260312-151815.json`
+- `artifacts/bench/ws-20260312-151815.json`
+- `artifacts/bench/mixed-20260312-151815.json`
 
 Key metrics:
 
 | Mode | Concurrency | Requests | io_threads | QPS | p50(us) | p95(us) | p99(us) | Errors |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| HTTP | 16 | 1000 | 4 | 1812.99 | 8780 | 11222 | 11908 | 0 |
-| WS | 16 | 1000 | 4 | 1877.93 | 8180 | 10124 | 11133 | 0 |
+| HTTP | 16 | 1000 | 4 | 2103.16 | 7247 | 10677 | 13008 | 0 |
+| WS | 16 | 1000 | 4 | 2553.77 | 6036 | 7653 | 8985 | 0 |
+| Mixed(total) | 16 | 1000 | 4 | 2316.90 | - | - | - | 0 |
+
+Mixed protocol split (`--mixed-http-ratio 0.5`, HTTP=500 / WS=500):
+
+| Mixed Protocol | QPS | p50(us) | p95(us) | p99(us) | Errors |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| HTTP | 1159.93 | 6769 | 8352 | 10100 | 0 |
+| WS | 1164.86 | 6599 | 8131 | 9284 | 0 |
 
 ### CPU/RSS Sample (same profile, `/usr/bin/time -v`)
 
@@ -118,24 +130,16 @@ Note:
 - `time -v` reflects the benchmark process (embedded gateway + load client in one process) and is used as quick baseline only.
 - For single-port mixed-load acceptance in P2.5, keep using dedicated run records and compare against this snapshot.
 
-## Single-Port Migration Benchmark Guidance
+## Single-Port Mixed Benchmark Notes
 
-Current benchmark entry is based on separate HTTP and WS runs. For the single-port migration plan, add a mixed-traffic comparison with the following baseline method:
+`gateway_http_ws_bench` now supports `--mode mixed` and emits:
 
-1. Keep current outputs as baseline:
-   - HTTP-only (`--mode http`)
-   - WS-only (`--mode ws`)
-2. During single-port implementation phase, add a mixed profile:
-   - HTTP short requests and WS long sessions at the same time
-   - Same hardware, same build, fixed concurrency budget
-3. Record and compare:
-   - QPS (HTTP path)
-   - WS message round-trip latency (p50/p95/p99)
-   - Error rate split by protocol
-   - Tail latency regression under mixed load
+- Total mixed throughput (`success/errors/elapsed_ms/qps`)
+- Protocol-level split stats under `protocols.http` and `protocols.ws`
+- Request split metadata under `split` (`http_requests`, `ws_requests`)
 
-Recommended acceptance gate for rollout:
+Recommended usage for repeatable comparison:
 
-- No functional regressions in integration tests
-- Mixed-load p99 does not regress beyond agreed threshold
-- Error rate remains stable vs. dual-port baseline
+1. Keep fixed profile (`--concurrency 16 --requests 1000 --warmup 100 --io-threads 4`).
+2. Compare HTTP-only, WS-only, and mixed outputs from the same build machine.
+3. Track error rate and tail latency (`p95/p99`) for each protocol in mixed mode.
