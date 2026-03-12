@@ -52,7 +52,6 @@ struct GatewayConfig {
     int grpc_retry_attempts = 2;
     int grpc_retry_backoff_ms = 50;
     bool enable_cobalt_experimental = false;
-    bool enable_asio_grpc_experimental = false;
 };
 
 ServiceConfig LoadServiceConfig(const std::string& path,

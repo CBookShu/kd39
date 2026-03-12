@@ -3,7 +3,7 @@
 ## 职责边界
 
 - 对外提供 HTTP/WS 统一接入，并转发到内部 gRPC 服务。
-- 负责鉴权、请求上下文构建、错误映射、基础治理（限流/熔断/重试）。
+- 负责鉴权、请求上下文构建、错误映射、基础治理（限流/熔断/重试）与异步 RPC 调度。
 - 提供运维端点：`/health`、`/ready`、`/metrics`、`/admin/log-level`、`/admin/runtime-config`。
 - 不直接承载业务数据存储，核心业务逻辑仍在 config/user/game 三个 gRPC 服务。
 
@@ -17,7 +17,7 @@
 ## 启动链路（main -> 依赖 -> server）
 
 1. `main` 读取 `config/access_gateway.yaml`（`LoadGatewayConfig`）。
-2. 初始化日志并打印运行时开关（io 线程、cobalt/asio-grpc 实验开关、重试参数）。
+2. 初始化日志并打印运行时参数（io 线程、cobalt 开关、重试参数）。
 3. 构造核心依赖：
    - `ServiceResolver`（etcd）
    - `GrpcRouter`（目标服务 + 运行时配置）
@@ -62,13 +62,13 @@
 - 下游目标：`config_service_target`、`user_service_target`、`game_service_target`
 - 鉴权：`jwt_secret`、`jwt_issuer`、`jwt_audience`、`allow_legacy_token`
 - 路由治理：`grpc_timeout_ms`、`grpc_retry_attempts`、`grpc_retry_backoff_ms`
-- 实验开关：`enable_cobalt_experimental`、`enable_asio_grpc_experimental`
+- 实验开关：`enable_cobalt_experimental`
 
 ## 依赖关系
 
 - 上游：客户端（H5/Admin/GameClient）通过 HTTP/WS 访问网关。
 - 下游：
-  - `config_service`、`user_service`、`game_service` 的 gRPC Stub/Channel
+  - `config_service`、`user_service`、`game_service` 的 `asio-grpc` 客户端调用链
   - `ServiceResolver`（服务发现）
   - `CircuitBreaker`、`TokenBucketRateLimiter`（治理）
   - `MetricsRegistry`、`Tracer`（观测）
@@ -91,7 +91,6 @@
 - `main`：`gateways/access_gateway/main.cpp`
 - `impl`：
   - `gateways/access_gateway/http/http_server.h/.cpp`
-  - `gateways/access_gateway/ws/ws_server.h/.cpp`
   - `gateways/access_gateway/routing/grpc_router.h/.cpp`
   - `gateways/access_gateway/auth/auth_middleware.h/.cpp`
 - `config`：`config/access_gateway.yaml`
@@ -110,7 +109,7 @@
   - `gateway_http_ws_bench`（QPS/P50/P95/P99 基准）
 - 主要盲区：
   - WS 长连接下的大规模心跳与背压场景仍需专项压测。
-  - `asio-grpc` 尚未试点，RPC 仍是同步调用 + 重试治理模型。
+  - 高并发下 `asio-grpc` 取消传播与尾延迟行为仍需持续专项验证。
 
 ## 关联文档
 

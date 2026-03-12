@@ -54,8 +54,15 @@ private:
                                const std::string& body,
                                const std::string& auth_token,
                                const std::unordered_map<std::string, std::string>& headers);
+    boost::cobalt::task<HttpResponse> HandleRequestAsync(const std::string& method,
+                                                         const std::string& path,
+                                                         const std::string& body,
+                                                         const std::string& auth_token,
+                                                         const std::unordered_map<std::string, std::string>& headers);
     std::string HandleWsMessage(const std::string& payload,
                                 const std::string& authenticated_user_id);
+    boost::cobalt::task<std::string> HandleWsMessageAsync(const std::string& payload,
+                                                          const std::string& authenticated_user_id);
 
     boost::cobalt::task<void> AcceptLoop();
     boost::cobalt::task<void> HandleSession(boost::asio::ip::tcp::socket socket);

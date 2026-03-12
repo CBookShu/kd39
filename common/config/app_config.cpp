@@ -151,7 +151,6 @@ GatewayConfig LoadGatewayConfig(const std::string& path) {
     gateway.grpc_retry_attempts = GetOr(cfg, "grpc_retry_attempts", 2);
     gateway.grpc_retry_backoff_ms = GetOr(cfg, "grpc_retry_backoff_ms", 50);
     gateway.enable_cobalt_experimental = GetOr(cfg, "enable_cobalt_experimental", false);
-    gateway.enable_asio_grpc_experimental = GetOr(cfg, "enable_asio_grpc_experimental", false);
     return gateway;
 }
 

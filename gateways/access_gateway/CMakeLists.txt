@@ -33,6 +33,10 @@ if(TARGET Boost::cobalt)
     target_link_libraries(access_gateway_lib PUBLIC Boost::cobalt)
 endif()
 
+if(TARGET asio-grpc::asio-grpc)
+    target_link_libraries(access_gateway_lib PUBLIC asio-grpc::asio-grpc)
+endif()
+
 add_executable(access_gateway
     main.cpp
 )

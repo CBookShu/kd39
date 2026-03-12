@@ -29,7 +29,7 @@
 ## 2. 常见任务怎么定位
 
 - **改某个 RPC 接口**：先改 `api/proto/*`，再看对应 `services/*_service/*_impl.*` 和 gateway 路由映射。
-- **改网关请求路由**：看 `gateways/access_gateway/routing/grpc_router.*` 和 `http/http_server.*`、`ws/ws_server.*`。
+- **改网关请求路由**：看 `gateways/access_gateway/routing/grpc_router.*` 和 `http/http_server.*`（同端口 HTTP/WS）。
 - **改鉴权**：看 `gateways/access_gateway/auth/auth_middleware.*`。
 - **改运行时配置项**：同时改 `app_config.h`、`app_config.cpp`、`config/*.yaml`、可能还包括 `deploy/k8s/configmap.yaml`。
 - **加测试/回归**：先看 `tests/integration/`，网关性能验证看 `bench/gateway_http_ws_bench.cpp` 与 `scripts/bench/run_http_ws_bench.sh`。
@@ -48,7 +48,6 @@
   - `grpc_retry_attempts`
   - `grpc_retry_backoff_ms`
   - `enable_cobalt_experimental`
-  - `enable_asio_grpc_experimental`
 
 ## 4. 执行改动前的最小核对
 

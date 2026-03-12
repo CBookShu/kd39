@@ -21,10 +21,9 @@ int main(int argc, char* argv[]) {
         true,
     });
     KD39_LOG_INFO(
-        "gateway runtime flags: http_io_threads={} cobalt_exp={} asio_grpc_exp={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
+        "gateway runtime flags: http_io_threads={} cobalt_exp={} grpc_timeout_ms={} retry_attempts={} retry_backoff_ms={}",
         cfg.http_io_threads,
         cfg.enable_cobalt_experimental ? "on" : "off",
-        cfg.enable_asio_grpc_experimental ? "on" : "off",
         cfg.grpc_timeout_ms,
         cfg.grpc_retry_attempts,
         cfg.grpc_retry_backoff_ms);

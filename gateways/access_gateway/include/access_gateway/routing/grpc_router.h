@@ -1,10 +1,16 @@
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
+#include <vector>
 
+#include <agrpc/client_rpc.hpp>
+#include <agrpc/grpc_context.hpp>
+#include <boost/cobalt/task.hpp>
 #include <grpcpp/grpcpp.h>
 
 #include "config/config_service.grpc.pb.h"
@@ -42,6 +48,7 @@ public:
     explicit GrpcRouter(RouterTargets targets,
                         std::shared_ptr<infrastructure::coordination::ServiceResolver> resolver = nullptr,
                         RouterRuntimeConfig runtime_config = {});
+    ~GrpcRouter();
 
     std::string Route(const std::string& path,
                       const std::string& body,
@@ -49,11 +56,19 @@ public:
     RouteResult RouteWithStatus(const std::string& path,
                                 const std::string& body,
                                 const common::RequestContext& ctx);
+    boost::cobalt::task<std::string> RouteAsync(const std::string& path,
+                                                const std::string& body,
+                                                const common::RequestContext& ctx);
+    boost::cobalt::task<RouteResult> RouteWithStatusAsync(const std::string& path,
+                                                          const std::string& body,
+                                                          const common::RequestContext& ctx);
 
     RouterRuntimeConfig GetRuntimeConfig() const;
     void UpdateRuntimeConfig(const RouterRuntimeConfig& config);
 
 private:
+    void StartGrpcWorkers();
+    void StopGrpcWorkers();
     std::string ResolveTarget(const std::string& service_name,
                               const std::string& fallback,
                               const std::string& traffic_tag) const;
@@ -82,6 +97,11 @@ private:
     framework::governance::TokenBucketRateLimiter config_rate_limiter_;
     framework::governance::TokenBucketRateLimiter user_rate_limiter_;
     framework::governance::TokenBucketRateLimiter game_rate_limiter_;
+
+    std::size_t grpc_thread_count_{1};
+    agrpc::GrpcContext grpc_context_;
+    std::atomic<bool> grpc_running_{false};
+    std::vector<std::thread> grpc_threads_;
 };
 
 }  // namespace kd39::gateways::access

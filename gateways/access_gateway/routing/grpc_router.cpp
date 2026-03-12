@@ -3,8 +3,14 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <future>
 #include <thread>
 
+#include <boost/asio/redirect_error.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/use_future.hpp>
+#include <boost/cobalt/op.hpp>
+#include <boost/cobalt/spawn.hpp>
 #include <grpcpp/grpcpp.h>
 #include <nlohmann/json.hpp>
 
@@ -15,6 +21,15 @@
 
 namespace kd39::gateways::access {
 namespace {
+namespace net = boost::asio;
+namespace cobalt = boost::cobalt;
+
+using ConfigGetRpc = agrpc::ClientRPC<&api::config::ConfigService::Stub::PrepareAsyncGetConfig>;
+using ConfigPublishRpc = agrpc::ClientRPC<&api::config::ConfigService::Stub::PrepareAsyncPublishConfig>;
+using UserGetRpc = agrpc::ClientRPC<&api::user::UserService::Stub::PrepareAsyncGetUser>;
+using UserCreateRpc = agrpc::ClientRPC<&api::user::UserService::Stub::PrepareAsyncCreateUser>;
+using GameCreateRoomRpc = agrpc::ClientRPC<&api::game::GameService::Stub::PrepareAsyncCreateRoom>;
+using GameJoinRoomRpc = agrpc::ClientRPC<&api::game::GameService::Stub::PrepareAsyncJoinRoom>;
 
 void AddMetadata(grpc::ClientContext& grpc_ctx, const common::RequestContext& ctx) {
     if (!ctx.request_id.empty()) grpc_ctx.AddMetadata(common::RequestContext::kMetaRequestId, ctx.request_id);
@@ -56,6 +71,8 @@ int HttpStatusFromGrpc(grpc::StatusCode code) {
             return 504;
         case grpc::StatusCode::UNAVAILABLE:
             return 503;
+        case grpc::StatusCode::RESOURCE_EXHAUSTED:
+            return 429;
         default:
             return 502;
     }
@@ -65,17 +82,32 @@ bool IsRetryable(grpc::StatusCode code) {
     return code == grpc::StatusCode::UNAVAILABLE || code == grpc::StatusCode::DEADLINE_EXCEEDED;
 }
 
-template <typename RpcFn>
-grpc::Status InvokeWithResilience(const common::RequestContext& ctx,
-                                  const RouterRuntimeConfig& runtime,
-                                  framework::governance::CircuitBreaker& breaker,
-                                  framework::governance::TokenBucketRateLimiter& limiter,
-                                  RpcFn&& rpc_fn) {
+std::size_t DefaultGrpcThreadCount() {
+    const auto hc = std::thread::hardware_concurrency();
+    if (hc == 0) {
+        return 2;
+    }
+    return std::clamp<std::size_t>(hc / 2, 1, 4);
+}
+
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+template <typename RpcType, typename StubT, typename RequestT, typename ResponseT>
+cobalt::task<grpc::Status> InvokeWithResilienceAsync(agrpc::GrpcContext& grpc_context,
+                                                     const common::RequestContext& ctx,
+                                                     const RouterRuntimeConfig& runtime,
+                                                     framework::governance::CircuitBreaker& breaker,
+                                                     framework::governance::TokenBucketRateLimiter& limiter,
+                                                     StubT& stub,
+                                                     const RequestT& req,
+                                                     ResponseT& resp) {
     if (!limiter.Allow()) {
-        return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "gateway rate limit exceeded");
+        co_return grpc::Status(grpc::StatusCode::RESOURCE_EXHAUSTED, "gateway rate limit exceeded");
     }
     if (!breaker.AllowRequest()) {
-        return grpc::Status(grpc::StatusCode::UNAVAILABLE, "circuit breaker open");
+        co_return grpc::Status(grpc::StatusCode::UNAVAILABLE, "circuit breaker open");
     }
 
     const int attempts = std::max(1, runtime.retry_attempts);
@@ -87,22 +119,28 @@ grpc::Status InvokeWithResilience(const common::RequestContext& ctx,
         grpc::ClientContext grpc_ctx;
         grpc_ctx.set_deadline(std::chrono::system_clock::now() + timeout);
         AddMetadata(grpc_ctx, ctx);
-        last_status = rpc_fn(grpc_ctx);
+        last_status = co_await RpcType::request(grpc_context, stub, grpc_ctx, req, resp, cobalt::use_op);
         if (last_status.ok()) {
             breaker.RecordSuccess();
-            return last_status;
+            co_return last_status;
         }
 
         breaker.RecordFailure();
         if (!IsRetryable(last_status.error_code()) || attempt == attempts) {
-            return last_status;
+            co_return last_status;
         }
         if (backoff.count() > 0) {
-            std::this_thread::sleep_for(backoff);
+            net::steady_timer timer(grpc_context);
+            timer.expires_after(backoff);
+            boost::system::error_code ec;
+            co_await timer.async_wait(net::redirect_error(cobalt::use_op, ec));
+            if (ec == net::error::operation_aborted) {
+                co_return grpc::Status(grpc::StatusCode::CANCELLED, "retry_backoff_cancelled");
+            }
         }
     }
 
-    return last_status;
+    co_return last_status;
 }
 }  // namespace
 
@@ -117,7 +155,50 @@ GrpcRouter::GrpcRouter(RouterTargets targets,
       game_breaker_(5, std::chrono::seconds(5)),
       config_rate_limiter_(500.0, 1000.0),
       user_rate_limiter_(500.0, 1000.0),
-      game_rate_limiter_(500.0, 1000.0) {}
+      game_rate_limiter_(500.0, 1000.0),
+      grpc_thread_count_(DefaultGrpcThreadCount()),
+      grpc_context_(grpc_thread_count_) {
+    StartGrpcWorkers();
+}
+
+GrpcRouter::~GrpcRouter() { StopGrpcWorkers(); }
+
+void GrpcRouter::StartGrpcWorkers() {
+    if (grpc_running_.exchange(true)) {
+        return;
+    }
+    grpc_threads_.reserve(grpc_thread_count_);
+    for (std::size_t i = 0; i < grpc_thread_count_; ++i) {
+        grpc_threads_.emplace_back([this] {
+            while (grpc_running_.load(std::memory_order_acquire)) {
+                const bool did_work = grpc_context_.run();
+                if (!grpc_running_.load(std::memory_order_acquire)) {
+                    break;
+                }
+                grpc_context_.reset();
+                if (!did_work) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+            }
+        });
+    }
+    KD39_LOG_INFO("GrpcRouter async grpc workers started: {}", grpc_thread_count_);
+}
+
+void GrpcRouter::StopGrpcWorkers() {
+    if (!grpc_running_.exchange(false)) {
+        return;
+    }
+    grpc_context_.stop();
+    for (auto& thread : grpc_threads_) {
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+    grpc_threads_.clear();
+    grpc_context_.reset();
+    KD39_LOG_INFO("GrpcRouter async grpc workers stopped");
+}
 
 std::string GrpcRouter::ResolveTarget(const std::string& service_name,
                                       const std::string& fallback,
@@ -146,6 +227,24 @@ std::string GrpcRouter::Route(const std::string& path,
 RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
                                         const std::string& body,
                                         const common::RequestContext& ctx) {
+    try {
+        auto fut = cobalt::spawn(grpc_context_, RouteWithStatusAsync(path, body, ctx), net::use_future);
+        return fut.get();
+    } catch (const std::exception& ex) {
+        KD39_LOG_ERROR("GrpcRouter RouteWithStatus sync wrapper failed: {}", ex.what());
+        return {503, ErrorJson("router_async_failed", ex.what()).dump(), "router_async_failed", "", grpc::StatusCode::UNAVAILABLE};
+    }
+}
+
+boost::cobalt::task<std::string> GrpcRouter::RouteAsync(const std::string& path,
+                                                        const std::string& body,
+                                                        const common::RequestContext& ctx) {
+    co_return (co_await RouteWithStatusAsync(path, body, ctx)).body;
+}
+
+boost::cobalt::task<RouteResult> GrpcRouter::RouteWithStatusAsync(const std::string& path,
+                                                                  const std::string& body,
+                                                                  const common::RequestContext& ctx) {
     auto span = kd39::infrastructure::observability::Tracer::Instance().StartSpan("gateway.grpc_route");
     const auto started_at = std::chrono::steady_clock::now();
     auto finish = [&](RouteResult result) {
@@ -173,7 +272,7 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
 
     const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
     if (json.is_discarded()) {
-        return finish({400, ErrorJson("invalid_json", "invalid_json").dump(), "invalid_json", "", grpc::StatusCode::INVALID_ARGUMENT});
+        co_return finish({400, ErrorJson("invalid_json", "invalid_json").dump(), "invalid_json", "", grpc::StatusCode::INVALID_ARGUMENT});
     }
 
     const auto runtime = GetRuntimeConfig();
@@ -185,28 +284,27 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         req.set_namespace_name(json.value("namespace_name", ""));
         req.set_key(json.value("key", ""));
         kd39::api::config::GetConfigResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->GetConfig(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<ConfigGetRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "config_service",
                 status.error_code()});
         }
-        return finish({200,
-                       nlohmann::json{
-                           {"namespace_name", resp.entry().namespace_name()},
-                           {"key", resp.entry().key()},
-                           {"value", resp.entry().value()},
-                           {"version", resp.entry().version()},
-                           {"environment", resp.entry().environment()}}
-                           .dump(),
-                       "",
-                       "config_service",
-                       grpc::StatusCode::OK});
+        co_return finish({200,
+                          nlohmann::json{
+                              {"namespace_name", resp.entry().namespace_name()},
+                              {"key", resp.entry().key()},
+                              {"value", resp.entry().value()},
+                              {"version", resp.entry().version()},
+                              {"environment", resp.entry().environment()}}
+                              .dump(),
+                          "",
+                          "config_service",
+                          grpc::StatusCode::OK});
     }
 
     if (path == "/config/publish") {
@@ -219,18 +317,17 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         entry->set_value(json.value("value", ""));
         entry->set_environment(json.value("environment", "dev"));
         kd39::api::config::PublishConfigResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->PublishConfig(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<ConfigPublishRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("config_service"), RateLimiterFor("config_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "config_service",
                 status.error_code()});
         }
-        return finish({200, nlohmann::json{{"version", resp.version()}}.dump(), "", "config_service", grpc::StatusCode::OK});
+        co_return finish({200, nlohmann::json{{"version", resp.version()}}.dump(), "", "config_service", grpc::StatusCode::OK});
     }
 
     if (path == "/user/get") {
@@ -239,28 +336,27 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         kd39::api::user::GetUserRequest req;
         req.set_user_id(json.value("user_id", ctx.user_id));
         kd39::api::user::GetUserResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->GetUser(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<UserGetRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "user_service",
                 status.error_code()});
         }
-        return finish({200,
-                       nlohmann::json{
-                           {"user_id", resp.profile().user_id()},
-                           {"nickname", resp.profile().nickname()},
-                           {"avatar", resp.profile().avatar()},
-                           {"level", resp.profile().level()},
-                           {"created_at", resp.profile().created_at()}}
-                           .dump(),
-                       "",
-                       "user_service",
-                       grpc::StatusCode::OK});
+        co_return finish({200,
+                          nlohmann::json{
+                              {"user_id", resp.profile().user_id()},
+                              {"nickname", resp.profile().nickname()},
+                              {"avatar", resp.profile().avatar()},
+                              {"level", resp.profile().level()},
+                              {"created_at", resp.profile().created_at()}}
+                              .dump(),
+                          "",
+                          "user_service",
+                          grpc::StatusCode::OK});
     }
 
     if (path == "/user/create") {
@@ -269,22 +365,21 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         kd39::api::user::CreateUserRequest req;
         req.set_nickname(json.value("nickname", ""));
         kd39::api::user::CreateUserResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->CreateUser(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<UserCreateRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("user_service"), RateLimiterFor("user_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "user_service",
                 status.error_code()});
         }
-        return finish({200,
-                       nlohmann::json{{"user_id", resp.profile().user_id()}, {"nickname", resp.profile().nickname()}}.dump(),
-                       "",
-                       "user_service",
-                       grpc::StatusCode::OK});
+        co_return finish({200,
+                          nlohmann::json{{"user_id", resp.profile().user_id()}, {"nickname", resp.profile().nickname()}}.dump(),
+                          "",
+                          "user_service",
+                          grpc::StatusCode::OK});
     }
 
     if (path == "/game/create-room") {
@@ -294,18 +389,17 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         req.set_room_name(json.value("room_name", ""));
         req.set_max_players(json.value("max_players", 4));
         kd39::api::game::CreateRoomResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->CreateRoom(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<GameCreateRoomRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "game_service",
                 status.error_code()});
         }
-        return finish({200, nlohmann::json{{"room_id", resp.room_id()}}.dump(), "", "game_service", grpc::StatusCode::OK});
+        co_return finish({200, nlohmann::json{{"room_id", resp.room_id()}}.dump(), "", "game_service", grpc::StatusCode::OK});
     }
 
     if (path == "/game/join-room") {
@@ -315,22 +409,24 @@ RouteResult GrpcRouter::RouteWithStatus(const std::string& path,
         req.set_room_id(json.value("room_id", ""));
         req.set_user_id(json.value("user_id", ctx.user_id));
         kd39::api::game::JoinRoomResponse resp;
-        const auto status = InvokeWithResilience(
-            ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"),
-            [&](grpc::ClientContext& grpc_ctx) { return stub->JoinRoom(&grpc_ctx, req, &resp); });
+        const auto status = co_await InvokeWithResilienceAsync<GameJoinRoomRpc>(
+            grpc_context_, ctx, runtime, BreakerFor("game_service"), RateLimiterFor("game_service"), *stub, req, resp);
         if (!status.ok()) {
-            return finish({
+            co_return finish({
                 HttpStatusFromGrpc(status.error_code()),
                 ErrorJson("downstream_error", status.error_message(), static_cast<int>(status.error_code())).dump(),
                 "downstream_error",
                 "game_service",
                 status.error_code()});
         }
-        return finish({200, nlohmann::json{{"success", resp.success()}}.dump(), "", "game_service", grpc::StatusCode::OK});
+        co_return finish({200, nlohmann::json{{"success", resp.success()}}.dump(), "", "game_service", grpc::StatusCode::OK});
     }
 
-    return finish({404, ErrorJson("route_not_found", "route_not_found").dump(), "route_not_found", "", grpc::StatusCode::NOT_FOUND});
+    co_return finish({404, ErrorJson("route_not_found", "route_not_found").dump(), "route_not_found", "", grpc::StatusCode::NOT_FOUND});
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 RouterRuntimeConfig GrpcRouter::GetRuntimeConfig() const {
     std::scoped_lock lock(config_mu_);

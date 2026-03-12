@@ -16,6 +16,7 @@
     "boost-asio",
     "boost-beast",
     "boost-cobalt",
+    "asio-grpc",
     {
       "name": "protobuf",
       "host": true
@@ -50,7 +51,8 @@
       "dependencies": [
         "boost-asio",
         "boost-beast",
-        "boost-cobalt"
+        "boost-cobalt",
+        "asio-grpc"
       ]
     }
   }

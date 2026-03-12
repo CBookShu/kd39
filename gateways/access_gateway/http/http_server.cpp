@@ -295,6 +295,124 @@ HttpServer::HttpResponse HttpServer::HandleRequest(
     return {routed.status_code, routed.body, "application/json"};
 }
 
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+boost::cobalt::task<HttpServer::HttpResponse> HttpServer::HandleRequestAsync(
+    const std::string& method,
+    const std::string& path,
+    const std::string& body,
+    const std::string& auth_token,
+    const std::unordered_map<std::string, std::string>& headers) {
+    if (path == "/health") {
+        co_return HttpResponse{200, R"({"status":"ok","service":"access_gateway"})", "application/json"};
+    }
+    if (path == "/ready") {
+        if (router_) {
+            co_return HttpResponse{200, R"({"status":"ready"})", "application/json"};
+        }
+        co_return HttpResponse{503, R"({"status":"not_ready","reason":"router_unavailable"})", "application/json"};
+    }
+    if (path == "/metrics") {
+        co_return HttpResponse{
+            200, kd39::infrastructure::observability::MetricsRegistry::Instance().RenderPrometheus(), "text/plain; charset=utf-8"};
+    }
+
+    const auto normalized_method = ToLowerAscii(method);
+    if (path == "/admin/log-level") {
+        auto admin_ctx = auth_ ? auth_->Authenticate(auth_token) : std::optional<common::RequestContext>{common::RequestContext{}};
+        if (!admin_ctx.has_value() || admin_ctx->user_id != "dev-user") {
+            co_return HttpResponse{401, R"({"error":"unauthorized_admin"})", "application/json"};
+        }
+        if (normalized_method == "get") {
+            const auto level = kd39::common::log::LogLevelName(kd39::common::log::GetLogLevel());
+            co_return HttpResponse{200, nlohmann::json{{"log_level", std::string(level)}}.dump(), "application/json"};
+        }
+        if (normalized_method == "post") {
+            const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
+            if (json.is_discarded() || !json.contains("log_level") || !json["log_level"].is_string()) {
+                co_return HttpResponse{400, R"({"error":"invalid_json"})", "application/json"};
+            }
+            if (!kd39::common::log::SetLogLevel(json["log_level"].get<std::string>())) {
+                co_return HttpResponse{400, R"({"error":"invalid_log_level"})", "application/json"};
+            }
+            co_return HttpResponse{
+                200,
+                nlohmann::json{{"log_level", std::string(kd39::common::log::LogLevelName(kd39::common::log::GetLogLevel()))}}.dump(),
+                "application/json"};
+        }
+        co_return HttpResponse{405, R"({"error":"method_not_allowed"})", "application/json"};
+    }
+
+    if (path == "/admin/runtime-config") {
+        auto admin_ctx = auth_ ? auth_->Authenticate(auth_token) : std::optional<common::RequestContext>{common::RequestContext{}};
+        if (!admin_ctx.has_value() || admin_ctx->user_id != "dev-user") {
+            co_return HttpResponse{401, R"({"error":"unauthorized_admin"})", "application/json"};
+        }
+        if (!router_) {
+            co_return HttpResponse{503, R"({"error":"router_unavailable"})", "application/json"};
+        }
+        if (normalized_method == "get") {
+            const auto cfg = router_->GetRuntimeConfig();
+            co_return HttpResponse{
+                200,
+                nlohmann::json{
+                    {"grpc_timeout_ms", cfg.grpc_timeout_ms},
+                    {"retry_attempts", cfg.retry_attempts},
+                    {"retry_backoff_ms", cfg.retry_backoff_ms}}
+                    .dump(),
+                "application/json"};
+        }
+        if (normalized_method == "post") {
+            const auto json = nlohmann::json::parse(body.empty() ? "{}" : body, nullptr, false);
+            if (json.is_discarded()) {
+                co_return HttpResponse{400, R"({"error":"invalid_json"})", "application/json"};
+            }
+            RouterRuntimeConfig cfg = router_->GetRuntimeConfig();
+            if (json.contains("grpc_timeout_ms")) cfg.grpc_timeout_ms = json["grpc_timeout_ms"].get<int>();
+            if (json.contains("retry_attempts")) cfg.retry_attempts = json["retry_attempts"].get<int>();
+            if (json.contains("retry_backoff_ms")) cfg.retry_backoff_ms = json["retry_backoff_ms"].get<int>();
+            router_->UpdateRuntimeConfig(cfg);
+            const auto effective = router_->GetRuntimeConfig();
+            co_return HttpResponse{
+                200,
+                nlohmann::json{
+                    {"grpc_timeout_ms", effective.grpc_timeout_ms},
+                    {"retry_attempts", effective.retry_attempts},
+                    {"retry_backoff_ms", effective.retry_backoff_ms}}
+                    .dump(),
+                "application/json"};
+        }
+        co_return HttpResponse{405, R"({"error":"method_not_allowed"})", "application/json"};
+    }
+
+    auto auth_ctx = auth_ ? auth_->Authenticate(auth_token) : std::optional<common::RequestContext>{common::RequestContext{}};
+    if (!auth_ctx.has_value()) {
+        co_return HttpResponse{401, R"({"error":"unauthorized"})", "application/json"};
+    }
+    if (!router_) {
+        co_return HttpResponse{503, R"({"error":"router_unavailable"})", "application/json"};
+    }
+
+    const auto generated_request_id = "gw-req-" + std::to_string(request_seq_.fetch_add(1));
+    auto request_id = HeaderOrEmpty(headers, "x-request-id");
+    if (request_id.empty()) request_id = generated_request_id;
+    auto trace_id = HeaderOrEmpty(headers, "x-trace-id");
+    if (trace_id.empty()) trace_id = request_id;
+    auto traffic_tag = HeaderOrEmpty(headers, "x-traffic-tag");
+    if (traffic_tag.empty()) traffic_tag = "default";
+    auto client_version = HeaderOrEmpty(headers, "x-client-version");
+    if (client_version.empty()) client_version = "unknown";
+    auto zone = HeaderOrEmpty(headers, "x-zone");
+    if (zone.empty()) zone = "default";
+
+    auto ctx = BuildContextFromHeaders(request_id, trace_id, traffic_tag, client_version, zone);
+    ctx.user_id = auth_ctx->user_id;
+    auto routed = co_await router_->RouteWithStatusAsync(path, body, ctx);
+    co_return HttpResponse{routed.status_code, routed.body, "application/json"};
+}
+
 std::string HttpServer::HandleWsMessage(const std::string& payload,
                                         const std::string& authenticated_user_id) {
     const auto json = nlohmann::json::parse(payload.empty() ? "{}" : payload, nullptr, false);
@@ -334,6 +452,49 @@ std::string HttpServer::HandleWsMessage(const std::string& payload,
     }
     return routed.body;
 }
+
+boost::cobalt::task<std::string> HttpServer::HandleWsMessageAsync(const std::string& payload,
+                                                                  const std::string& authenticated_user_id) {
+    const auto json = nlohmann::json::parse(payload.empty() ? "{}" : payload, nullptr, false);
+    if (json.is_discarded()) {
+        co_return WsErrorJson("invalid_json", "bad_request", 400);
+    }
+
+    std::unordered_map<std::string, std::string> headers;
+    if (auto it = json.find("headers"); it != json.end() && it->is_object()) {
+        for (const auto& [key, value] : it->items()) {
+            if (value.is_string()) {
+                headers[ToLowerAscii(key)] = value.get<std::string>();
+            }
+        }
+    }
+
+    const auto generated_request_id = "gw-ws-" + std::to_string(request_seq_.fetch_add(1));
+    auto request_id = HeaderOrEmpty(headers, "x-request-id");
+    if (request_id.empty()) request_id = generated_request_id;
+    auto trace_id = HeaderOrEmpty(headers, "x-trace-id");
+    if (trace_id.empty()) trace_id = request_id;
+    auto traffic_tag = HeaderOrEmpty(headers, "x-traffic-tag");
+    if (traffic_tag.empty()) traffic_tag = "default";
+    auto client_version = HeaderOrEmpty(headers, "x-client-version");
+    if (client_version.empty()) client_version = "unknown";
+    auto zone = HeaderOrEmpty(headers, "x-zone");
+    if (zone.empty()) zone = "default";
+
+    auto ctx = BuildContextFromHeaders(request_id, trace_id, traffic_tag, client_version, zone);
+    ctx.user_id = authenticated_user_id;
+    if (!router_) {
+        co_return WsErrorJson("router_unavailable", "service_unavailable", 503);
+    }
+    auto routed = co_await router_->RouteWithStatusAsync(json.value("path", ""), json.value("body", "{}"), ctx);
+    if (routed.body.empty()) {
+        co_return WsErrorJson("empty_downstream_response", "bad_gateway", 502);
+    }
+    co_return routed.body;
+}
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
 #if defined(__GNUC__) && !defined(__clang__)
 #pragma GCC diagnostic push
@@ -451,7 +612,7 @@ boost::cobalt::task<void> HttpServer::HandleSession(tcp::socket socket) {
             }
 
             const auto payload = beast::buffers_to_string(ws_buffer.data());
-            auto response_payload = HandleWsMessage(payload, auth_ctx->user_id);
+            auto response_payload = co_await HandleWsMessageAsync(payload, auth_ctx->user_id);
             if (response_payload.size() > kWsResponseMaxBytes) {
                 response_payload = WsErrorJson("response_too_large", "payload_too_large", 413);
             }
@@ -470,11 +631,11 @@ boost::cobalt::task<void> HttpServer::HandleSession(tcp::socket socket) {
     }
 
     const auto headers = NormalizeHeaders(req);
-    const auto response_payload = HandleRequest(std::string(req.method_string()),
-                                                std::string(req.target()),
-                                                req.body(),
-                                                std::string(req[http::field::authorization]),
-                                                headers);
+    const auto response_payload = co_await HandleRequestAsync(std::string(req.method_string()),
+                                                              std::string(req.target()),
+                                                              req.body(),
+                                                              std::string(req[http::field::authorization]),
+                                                              headers);
 
     http::response<http::string_body> response;
     response.result(ToHttpStatus(response_payload.status_code));
